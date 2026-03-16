@@ -1,3 +1,4 @@
+
 import os
 import sys
 
@@ -20,6 +21,13 @@ from ui.main_window import MainWindow
 
 def main():
     app = QApplication(sys.argv)
+
+    # --- 增加：大字号全局设置 ---
+    font = app.font()
+    font.setPointSize(11)
+    font.setFamily("Microsoft YaHei")
+    app.setFont(font)
+
     app.setStyle("Fusion")
     try:
         window = MainWindow()

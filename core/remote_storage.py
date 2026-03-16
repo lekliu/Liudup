@@ -1,3 +1,4 @@
+
 import os
 import boto3
 from botocore.client import Config
@@ -42,4 +43,13 @@ class MinioManager:
             return True
         except Exception as e:
             print(f"删除失败 {object_key}: {e}")
+            return False
+
+    def upload_file(self, bucket_name, local_path, object_key):
+        """上传本地文件到指定桶"""
+        try:
+            self.s3.upload_file(local_path, bucket_name, object_key)
+            return True
+        except Exception as e:
+            print(f"上传失败 {local_path}: {e}")
             return False

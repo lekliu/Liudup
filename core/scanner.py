@@ -1,3 +1,4 @@
+
 import os
 import time
 import numpy as np
@@ -73,7 +74,8 @@ class ImageScanner:
             # 【核心修正】：如果发现 _backup 目录，从 dirs 中移除它，os.walk 就不会进入该子目录
             if '_backup' in dirs:
                 dirs.remove('_backup')
-
+            if 'yolo_dataset' in dirs:
+                dirs.remove('yolo_dataset')
             for f in files:
                 if f.lower().endswith(valid_exts):
                     path = os.path.normpath(os.path.abspath(os.path.join(root, f)))

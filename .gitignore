@@ -8,5 +8,9 @@ config.json
 *.db
 .env
 
+
+
 # User Data (如果你选的路径在项目内，建议选在项目外)
 temp_cache/
+runs/
+.idea/

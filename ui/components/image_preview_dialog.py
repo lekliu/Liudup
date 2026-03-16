@@ -6,7 +6,7 @@ import os
 
 
 # =============================================================
-# FILE: ui\components.py
+# FILE: ui\image_preview_dialog.py
 # 核心组件库：包含高清预览对话框与图片信息展示卡片
 # =============================================================
 
@@ -97,7 +97,7 @@ class ImagePreviewDialog(QDialog):
                 color: #3498db; 
                 background: #1a252f; 
                 border-radius: 16px; 
-                font-size: 13px;
+                font-size: 20px;
                 {common_item_css}
             }}
         """)
@@ -248,157 +248,3 @@ class ImagePreviewDialog(QDialog):
         """组内导航逻辑"""
         self.index = (self.index + delta) % len(self.image_paths)
         self.load_image()
-
-
-class ImageCard(QWidget):
-    """
-    图片展示卡片：用于在分析结果列表中显示单张图片。
-    针对广告素材（长截图）优化了纵横比展示。
-    """
-
-    def __init__(self, local_path, remote_key, metadata, group_paths, on_delete_callback):
-        super().__init__()
-        self.local_path = local_path
-        self.remote_key = remote_key
-        self.metadata = metadata  # 格式: (path, key, width, height, size)
-        self.group_paths = group_paths  # 组内所有图片的路径，用于双击大图切换
-        self.on_delete_callback = on_delete_callback
-
-        self.initUI()
-
-    def initUI(self):
-        layout = QVBoxLayout(self)
-        self.setFixedWidth(240)  # 卡片固定宽度
-        self.setStyleSheet("""
-            ImageCard { 
-                background: white; 
-                border: 2px solid #e0e0e0; 
-                border-radius: 10px; 
-            } 
-            ImageCard:hover { 
-                border-color: #3498db; 
-                background-color: #f7f9fa; 
-            }
-        """)
-
-        # 1. 预览缩略图 (220x380，适配手机端长图比例)
-        self.img_label = QLabel()
-        self.img_label.setFixedSize(220, 380)
-        self.img_label.setCursor(Qt.PointingHandCursor)
-        self.img_label.setAlignment(Qt.AlignCenter)
-
-        if os.path.exists(self.local_path):
-            pix = QPixmap(self.local_path)
-            self.img_label.setPixmap(
-                pix.scaled(220, 380, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            )
-        layout.addWidget(self.img_label)
-
-        # 2. 元数据信息显示 (分辨率与文件大小)
-        if self.metadata:
-            info_text = f"📐 {self.metadata[2]}x{self.metadata[3]}\n📦 {self.metadata[4] / 1024 / 1024:.2f}MB"
-        else:
-            info_text = "元数据未加载"
-
-        info_label = QLabel(info_text)
-        info_label.setStyleSheet("color: #2980b9; font-weight: bold; font-size: 12px;")
-        info_label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(info_label)
-
-        # 3. 彻底删除按钮 (样式增强版)
-        self.btn_del = QPushButton("彻底删除")
-        self.btn_del.setFixedHeight(45)
-        self.btn_del.setFont(QFont("Microsoft YaHei", 10, QFont.Bold))
-        self.btn_del.setCursor(Qt.PointingHandCursor)
-        self.btn_del.setStyleSheet("""
-            QPushButton { 
-                background-color: #e74c3c; 
-                color: white; 
-                border-radius: 6px; 
-            }
-            QPushButton:hover { 
-                background-color: #c0392b; 
-            }
-        """)
-        self.btn_del.clicked.connect(self.request_delete)
-        layout.addWidget(self.btn_del)
-
-    def mouseDoubleClickEvent(self, event):
-        """响应双击：弹出高清对比预览对话框"""
-        if event.button() == Qt.LeftButton:
-            try:
-                # 寻找当前图片在组内的索引
-                idx = self.group_paths.index(self.local_path)
-            except ValueError:
-                idx = 0
-
-            dialog = ImagePreviewDialog(self.group_paths, idx, self)
-            dialog.exec_()
-
-    def request_delete(self):
-        """
-        触发删除确认弹窗：
-        采用 HTML 格式化展示，突出显示备份逻辑及待处理的文件名。
-        """
-        msg_box = QMessageBox(self)
-        msg_box.setWindowTitle("清理确认")
-        msg_box.setIcon(QMessageBox.Question)
-
-        file_name = os.path.basename(self.local_path)
-
-        # 构造 Rich Text 格式的确认信息
-        msg_text = f"""
-            <div style='font-family: "Microsoft YaHei"; min-width: 320px;'>
-                <p style='font-size: 15px; color: #2c3e50; font-weight: bold;'>确定要移除这张图片吗？</p>
-                <p style='font-size: 13px; color: #7f8c8d; line-height: 1.6;'>
-                    该操作将执行以下流程：<br>
-                    1. 将本地文件移至 <b style='color: #e67e22;'>_backup</b> 备份目录<br>
-                    2. 从云端 <b style='color: #e67e22;'>Minio</b> 桶同步删除该对象
-                </p>
-                <hr style='border: 0; border-top: 1px solid #eee;'>
-                <p style='font-size: 12px; color: #3498db; word-break: break-all;'>
-                    <b>待清理文件：</b><br>{file_name}
-                </p>
-            </div>
-        """
-        msg_box.setText(msg_text)
-
-        # 自定义交互按钮，增强操作预期
-        btn_confirm = msg_box.addButton(" 确认移动并删除 ", QMessageBox.AcceptRole)
-        btn_cancel = msg_box.addButton(" 保留图片 ", QMessageBox.RejectRole)
-
-        # 默认焦点设为取消，防止误删
-        msg_box.setDefaultButton(btn_cancel)
-
-        # 应用按钮层级样式
-        msg_box.setStyleSheet("""
-            QMessageBox { background-color: white; }
-            QPushButton { 
-                padding: 7px 20px; 
-                border-radius: 4px; 
-                font-weight: bold; 
-                min-width: 110px;
-            }
-            QPushButton[text=" 确认移动并删除 "] { 
-                background-color: #e74c3c; color: white; border: none; 
-            }
-            QPushButton[text=" 确认移动并删除 "]:hover { 
-                background-color: #c0392b; 
-            }
-            QPushButton[text=" 保留图片 "] { 
-                background-color: #ecf0f1; color: #2c3e50; border: 1px solid #bdc3c7; 
-            }
-            QPushButton[text=" 保留图片 "]:hover { 
-                background-color: #bdc3c7; 
-            }
-        """)
-
-        msg_box.exec_()
-
-        # 如果用户点击了确认按钮
-        if msg_box.clickedButton() == btn_confirm:
-            self.on_delete_callback(self.local_path, self.remote_key, self)
-
-# =============================================================
-# END OF FILE: ui\components.py
-# =============================================================
