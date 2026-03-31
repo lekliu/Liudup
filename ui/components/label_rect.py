@@ -11,6 +11,8 @@ class LabelRect(QGraphicsRectItem):
         self.label_id = class_id
         self.class_name = class_name
         self.color = color
+        self.uid = id(self)  # 任务 2：唯一标识符
+        self._update_callback = None # 任务 4：回调函数
         self.update_style()
         self.setOpacity(0.6)
         self.setFlags(
@@ -21,6 +23,10 @@ class LabelRect(QGraphicsRectItem):
         )
         self.setAcceptHoverEvents(True)
         self.handle_type = None
+
+    def set_update_callback(self, callback):
+        """任务 4：绑定变动时的通知回调"""
+        self._update_callback = callback
 
     def get_handle(self, pos):
         """判断当前鼠标点落在哪个缩放手柄上"""
@@ -86,8 +92,17 @@ class LabelRect(QGraphicsRectItem):
                 new_rect.setRight(max(pos.x(), new_rect.left() + min_size))
 
             self.setRect(new_rect.normalized())
+            if self._update_callback: self._update_callback() 
         else:
             super().mouseMoveEvent(event)
+            if self.isSelected() and self._update_callback: 
+                self._update_callback() 
+
+    def itemChange(self, change, value):
+        """任务 4：监听物体移动状态变更"""
+        if change == QGraphicsRectItem.ItemPositionHasChanged and self._update_callback:
+            self._update_callback()
+        return super().itemChange(change, value)
 
     def mouseReleaseEvent(self, event):
         self.handle_type = None

@@ -8,6 +8,7 @@ from ui.sidebar import NavigationSidebar
 from ui.pages.cleaner_page import CleanerPage
 from ui.pages.labeller_page import LabellerPage
 from ui.pages.trainer_page import TrainerPage
+from ui.pages.cloud_page import CloudPage
 
 
 class MainWindow(QMainWindow):
@@ -52,9 +53,11 @@ class MainWindow(QMainWindow):
         self.cleaner_page = CleanerPage(self.db)
         self.labeller_page = LabellerPage(self.db)
         self.trainer_page = TrainerPage(self.db)
+        self.cloud_page = CloudPage(self.db)
         self.stack.addWidget(self.cleaner_page)
         self.stack.addWidget(self.labeller_page)
         self.stack.addWidget(self.trainer_page)
+        self.stack.addWidget(self.cloud_page)
 
         # 4. 组装拆分器
         self.splitter.addWidget(self.sidebar)

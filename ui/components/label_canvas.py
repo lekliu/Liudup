@@ -8,6 +8,10 @@ from ui.components.label_rect import LabelRect
 class LabelCanvas(QGraphicsView):
     box_added = pyqtSignal(QRectF)
     selection_changed = pyqtSignal(int)
+    item_added = pyqtSignal(object)  # 任务 2：发射整个物体
+    item_removed = pyqtSignal(object)  # 核心修复：改用 object 防止 64 位 ID 溢出截断
+    item_selected = pyqtSignal(object) # 任务 3：物体被选中信号
+    item_updated = pyqtSignal(object)  # 任务 4：物体属性或几何变动信号
 
     def __init__(self):
         super().__init__()
@@ -49,6 +53,7 @@ class LabelCanvas(QGraphicsView):
         selected = self.scene.selectedItems()
         if len(selected) == 1 and isinstance(selected[0], LabelRect):
             self.selection_changed.emit(selected[0].label_id)
+            self.item_selected.emit(selected[0]) # 发射选中物体信号
 
     def set_class_names(self, names):
         self.class_names = names
@@ -147,7 +152,10 @@ class LabelCanvas(QGraphicsView):
                     self.class_names) else "Unknown"
 
                 box = LabelRect(final_rect, self.current_class_id, color, name)
+                # 任务 4 修正：手动画框也必须绑定回调
+                box.set_update_callback(lambda b=box: self.item_updated.emit(b))
                 self.scene.addItem(box)
+                self.item_added.emit(box)  # 同步到列表
                 self.box_added.emit(final_rect)
             self.is_drawing = False
             self.start_pos = None
@@ -188,7 +196,9 @@ class LabelCanvas(QGraphicsView):
 
             # 删除操作
             del_action = menu.addAction("🗑 删除 (Delete)")
+            del_action.triggered.connect(lambda: print(f"[LOG] 右键菜单触发删除, UID: {item.uid}"))
             del_action.triggered.connect(lambda: self.scene.removeItem(item))
+            del_action.triggered.connect(lambda: self.item_removed.emit(item.uid))
 
             menu.exec_(event.globalPos())
 
@@ -230,6 +240,8 @@ class LabelCanvas(QGraphicsView):
         if key in (Qt.Key_Delete, Qt.Key_Backspace):
             for item in self.scene.selectedItems():
                 if isinstance(item, LabelRect):
+                    print(f"[LOG] 键盘触发删除, UID: {item.uid}")
+                    self.item_removed.emit(item.uid)  # 同步到列表
                     self.scene.removeItem(item)
         else:
             # 必须调用父类，否则保存(S)等快捷键会失效
@@ -240,14 +252,19 @@ class LabelCanvas(QGraphicsView):
         draw_color = color if color != "#e74c3c" else self.get_color(class_id)
         name = self.class_names[class_id] if class_id < len(self.class_names) else "Unknown"
         box = LabelRect(rect, class_id, draw_color, name)
+        # 任务 4 修正：必须先设置回调，再 addItem，防止初始化触发变动导致崩溃
+        box.set_update_callback(lambda b=box: self.item_updated.emit(b))
         self.scene.addItem(box)
+        self.item_added.emit(box) # 初始化或 AI 注入时同步
 
     def get_all_boxes(self):
         """获取所有标注框坐标"""
         boxes = []
         for item in self.scene.items():
             if isinstance(item, LabelRect):
-                boxes.append((item.label_id, item.rect()))
+                # 不要用 item.rect()，因为它不包含位移信息
+                # 使用 sceneBoundingRect() 获取物体在画布上的真实像素坐标
+                boxes.append((item.label_id, item.sceneBoundingRect()))
         return boxes
 
     def update_selected_boxes_class(self, class_id, color, class_name):
@@ -256,6 +273,7 @@ class LabelCanvas(QGraphicsView):
         for item in selected_items:
             if isinstance(item, LabelRect):
                 item.update_class(class_id, color, class_name)
+                self.item_updated.emit(item) # 任务 4：属性修改同步
 
         # 同时更新全局“当前类别”，确保后续画的新框也是这个类
         self.current_class_id = class_id

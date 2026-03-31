@@ -1,3 +1,4 @@
+import json
 import sqlite3
 import os
 
@@ -105,12 +106,9 @@ class DatabaseManager:
             return []
 
         for root, dirs, files in os.walk(folder_path):
-            # 自动排除去重模块生成的备份文件夹，避免标注重复数据
-            if '_backup' in dirs:
-                dirs.remove('_backup')
-
-            if 'yolo_dataset' in dirs:
-                dirs.remove('yolo_dataset')
+            # 任务 9：全量黑名单隔离，排除所有中间产物目录
+            blacklist = ['_backup']
+            dirs[:] = [d for d in dirs if d not in blacklist and not d.startswith('yolo_dataset')]
 
             for f in files:
                 if f.lower().endswith(valid_exts):
@@ -167,3 +165,25 @@ class DatabaseManager:
             return len(orphans)
         return 0
 
+    def get_all_class_counts(self):
+        """核心统计：穿透所有标注记录的 JSON，计算各类别实例总数"""
+        counts = {}
+        try:
+            # 1. 只查询已标注的记录
+            self.cursor.execute("SELECT label_data FROM label_records WHERE is_labeled = 1")
+            rows = self.cursor.fetchall()
+
+            for row in rows:
+                label_str = row[0]
+                if not label_str: continue
+
+                # 2. 解析 JSON 数据: [[cls_id, [box]], [cls_id, [box]]...]
+                labels = json.loads(label_str)
+                for item in labels:
+                    cls_id = int(item[0])  # 类别 ID
+                    counts[cls_id] = counts.get(cls_id, 0) + 1
+
+            return counts
+        except Exception as e:
+            print(f"统计类别失败: {e}")
+            return {}

@@ -1,16 +1,17 @@
 import os
 import json
 
-from PyQt5.QtGui import QPixmap
+from PyQt5.QtGui import QPixmap, QColor
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
-                             QLabel, QListWidget, QFrame, QMessageBox, QInputDialog, QFileDialog)
-from PyQt5.QtCore import Qt, QRectF
+                             QLabel, QListWidget, QFrame, QMessageBox, QInputDialog, QFileDialog, QMenu,
+                            QCheckBox, QTableWidget, QTableWidgetItem, QHeaderView)
+from PyQt5.QtCore import Qt, QRectF, QPoint
 from ultralytics import YOLO  # 引入推理能力
 
 from ui.components.label_canvas import LabelCanvas
+from ui.components.label_rect import LabelRect
 from utils.yolo_utils import convert_to_yolo, save_yolo_file
 from utils.config_manager import load_config, save_config, ProjectPaths
-from PyQt5.QtWidgets import QCheckBox
 
 
 def get_color(idx):
@@ -31,12 +32,17 @@ class LabellerPage(QWidget):
         self.current_img_index = -1
         self.current_model = None  # 缓存加载的模型
         self.last_labels_cache = []  # 缓存上一张标注
+        self._is_syncing = False  # 任务 3：防止双向联动死循环的标志位
 
         # 1. 先初始化 UI 控件 (创建 class_list)
         self.initUI()
 
         self.canvas.selection_changed.connect(self.sync_list_selection)
+        self.canvas.item_selected.connect(self.sync_table_selection)
         # 2. 再同步数据到画布
+        self.canvas.item_added.connect(self.add_table_row)
+        self.canvas.item_removed.connect(self.remove_table_row)
+        self.canvas.item_updated.connect(self.update_table_row) # 任务 4：监听变动
         self.sync_classes_to_canvas()
 
     def initUI(self):
@@ -116,7 +122,35 @@ class LabellerPage(QWidget):
 
         side_layout.addWidget(QLabel("📂 任务队列"))
         self.task_list = QListWidget()
-        self.task_list.itemClicked.connect(self.on_item_clicked)
+        self.task_list.setStyleSheet("""
+                    QListWidget {
+                        background-color: #ffffff;
+                        border: 1px solid #dcdfe6;
+                        outline: none; /* 去除虚线框 */
+                        font-size: 16px;
+                    }
+                    QListWidget::item {
+                        padding: 10px;
+                        border-bottom: 1px solid #f2f2f2;
+                        color: #606266;
+                    }
+                    QListWidget::item:hover {
+                        background-color: #ecf5ff;
+                    }
+                    /* 状态 1：当前选中并处于激活状态（蓝色底） */
+                    QListWidget::item:selected {
+                        background-color: #3498db;
+                        color: white;
+                        font-weight: bold;
+                        border-left: 5px solid #2980b9; /* 增加左侧粗条增强指引感 */
+                    }
+                    /* 状态 2：当前选中但鼠标点击了其他地方（失去焦点），依然保持醒目颜色 */
+                    QListWidget::item:selected:!active {
+                        background-color: #a0cfff; /* 稍浅一点的蓝色 */
+                        color: #ffffff;
+                    }
+                """)
+        self.task_list.currentRowChanged.connect(self.on_task_row_changed)  # 任务 5：监听行变化，支持键盘切换
         side_layout.addWidget(self.task_list)
         btn_refresh = QPushButton("🔄 刷新队列")
         btn_refresh.clicked.connect(self.refresh_queue)
@@ -129,7 +163,7 @@ class LabellerPage(QWidget):
 
         # 3. 右侧控制面板
         self.ctrl_panel = QFrame()
-        self.ctrl_panel.setFixedWidth(220)
+        self.ctrl_panel.setFixedWidth(300)
         self.ctrl_panel.setStyleSheet("background: #ffffff; border-left: 1px solid #dcdfe6;")
         ctrl_layout = QVBoxLayout(self.ctrl_panel)
 
@@ -137,6 +171,16 @@ class LabellerPage(QWidget):
         lbl_ai = QLabel("🤖 AI 智能辅助 (反哺标注)")
         lbl_ai.setStyleSheet("font-weight: bold; color: #2c3e50;")
         ctrl_layout.addWidget(lbl_ai)
+
+        # --- 新增：模型源切换按钮 ---
+        self.btn_select_model = QPushButton("🎯 切换模型源中心")
+        self.btn_select_model.setFixedHeight(40)
+        self.btn_select_model.setStyleSheet("""
+            QPushButton { background: #34495e; color: white; border-radius: 6px; font-weight: bold; }
+            QPushButton:hover { background: #2c3e50; }
+        """)
+        self.btn_select_model.clicked.connect(self.show_model_menu)
+        ctrl_layout.addWidget(self.btn_select_model)
 
         # 按钮 1: 单张预标注
         self.btn_ai_assist = QPushButton("✨ 单张自动识别")
@@ -155,8 +199,15 @@ class LabellerPage(QWidget):
         self.btn_batch_ai.clicked.connect(self.batch_ai_inference)
         ctrl_layout.addWidget(self.btn_batch_ai)
 
-        self.lbl_model_status = QLabel("模型状态: 未加载")
-        self.lbl_model_status.setStyleSheet("font-size: 14px; color: #7f8c8d;")
+        # --- 优化：加大当前模型状态的显示字号 ---
+        self.lbl_model_status = QLabel("当前模型: ⚡ 待选择")
+        self.lbl_model_status.setStyleSheet("""
+            font-size: 18px; 
+            color: #34495e; 
+            font-weight: bold; 
+            margin-top: 8px;
+            padding: 2px;
+        """)
         ctrl_layout.addWidget(self.lbl_model_status)
 
         ctrl_layout.addSpacing(15)
@@ -185,6 +236,31 @@ class LabellerPage(QWidget):
         self.check_inherit.setStyleSheet("color: #e67e22; font-weight: bold; margin: 10px 0;")
         ctrl_layout.addWidget(self.check_inherit)
 
+        # --- 任务 1：注入标注审计清单 ---
+        self.label_table = QTableWidget()
+        self.label_table.setColumnCount(2)
+        self.label_table.setHorizontalHeaderLabels(["类别", "坐标 (X,Y,W,H)"])
+        # 任务 3：调整比例为 1:2 (300px 下 100:200)
+        header = self.label_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.Interactive)
+        self.label_table.setColumnWidth(0, 80)
+        header.setSectionResizeMode(1, QHeaderView.Stretch)
+        
+        self.label_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.label_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.label_table.setSelectionMode(QTableWidget.SingleSelection)
+        self.label_table.setStyleSheet("""
+            QTableWidget {
+                background: #ffffff;
+                border: 1px solid #dcdfe6;
+                border-radius: 4px;
+                gridline-color: #f5f5f5;
+            }
+        """)
+        self.label_table.setMinimumHeight(200)
+        self.label_table.itemSelectionChanged.connect(self.on_table_selection_changed)
+        ctrl_layout.addWidget(self.label_table)
+
         ctrl_layout.addStretch()
 
         btn_save = QPushButton("💾 保存标注 (S)")
@@ -198,14 +274,98 @@ class LabellerPage(QWidget):
         btn_next.clicked.connect(self.load_next)
         ctrl_layout.addWidget(btn_next)
 
-        # 在右侧面板增加一个取消标注按钮
+        # 任务 6：按钮组（取消与物理删除）
         self.btn_reset = QPushButton("🗑 取消标注")
         self.btn_reset.setStyleSheet("background: #f56c6c; color: white;")
         self.btn_reset.clicked.connect(self.cancel_annotation)
         ctrl_layout.addWidget(self.btn_reset)
 
+        self.btn_phys_del = QPushButton("🔥 物理删除素材")
+        self.btn_phys_del.setFixedHeight(40)
+        self.btn_phys_del.setStyleSheet("background: #e67e22; color: white; font-weight: bold;")
+        self.btn_phys_del.setToolTip("从磁盘彻底删除原图及标注文件，不可恢复。")
+        self.btn_phys_del.clicked.connect(self.delete_physical_image)
+        ctrl_layout.addWidget(self.btn_phys_del)
+
         layout.addWidget(self.ctrl_panel)
         self.class_list.currentRowChanged.connect(self.on_class_changed)
+
+    def add_table_row(self, item):
+        """任务 2：向审计清单添加一行"""
+        row = self.label_table.rowCount()
+        print(f"[LOG] 准备添加表格行: Row={row}, UID={item.uid}")
+        self.label_table.insertRow(row)
+        
+        # 任务 4：使用 sceneBoundingRect 获取绝对物理坐标
+        r = item.sceneBoundingRect()
+        coord_text = f"({int(r.x())}, {int(r.y())}, {int(r.width())}, {int(r.height())})"
+        
+        cls_item = QTableWidgetItem(item.class_name)
+        cls_item.setForeground(QColor(item.color)) # 核心修复：转换为 QColor
+        cls_item.setData(Qt.UserRole, item.uid) # 存储 UID 用于后续绑定
+        
+        self.label_table.setItem(row, 0, cls_item)
+        self.label_table.setItem(row, 1, QTableWidgetItem(coord_text))
+
+    def update_table_row(self, item):
+        """任务 4：实时更新表格行数据（坐标、类别、颜色）"""
+        uid = item.uid
+        # print(f"[LOG-Page] 收到更新信号, 目标UID: {uid}")
+        for r in range(self.label_table.rowCount()):
+            it_cls = self.label_table.item(r, 0)
+            stored_uid = it_cls.data(Qt.UserRole)
+            if it_cls and int(stored_uid) == int(uid):
+                # print(f"  -> 匹配成功，正在更新第 {r} 行坐标")
+                # 1. 更新坐标 (X, Y, W, H)
+                rect = item.sceneBoundingRect()
+                coord_text = f"({int(rect.x())}, {int(rect.y())}, {int(rect.width())}, {int(rect.height())})"
+                self.label_table.item(r, 1).setText(coord_text)
+                
+                # 2. 更新类别名称与颜色
+                it_cls.setText(item.class_name)
+                it_cls.setForeground(QColor(item.color))
+                break
+
+    def remove_table_row(self, uid):
+        """任务 2：根据 UID 从清单移除行"""
+        print(f"[LOG] 收到删除请求信号, 目标UID={uid}, 表格总行数={self.label_table.rowCount()}")
+        for r in range(self.label_table.rowCount()):
+            it = self.label_table.item(r, 0)
+            stored_uid = it.data(Qt.UserRole)
+            print(f"  -> 正在检查第 {r} 行: 存储UID={stored_uid} vs 目标UID={uid} | 结果={stored_uid == uid}")
+            if it and stored_uid == uid:
+                print(f"  [!!!] 匹配成功，执行 removeRow({r})")
+                self.label_table.removeRow(r)
+                break
+
+    def on_table_selection_changed(self):
+        """任务 3：列表选中 -> 画布选中"""
+        if self._is_syncing: return
+        self._is_syncing = True
+        
+        selected_items = self.label_table.selectedItems()
+        if selected_items:
+            uid = selected_items[0].data(Qt.UserRole)
+            for item in self.canvas.scene.items():
+                if isinstance(item, LabelRect) and item.uid == uid:
+                    self.canvas.scene.clearSelection()
+                    item.setSelected(True)
+                    break
+        self._is_syncing = False
+
+    def sync_table_selection(self, canvas_item):
+        """任务 3：画布选中 -> 列表选中"""
+        if self._is_syncing: return
+        self._is_syncing = True
+        
+        uid = canvas_item.uid
+        for r in range(self.label_table.rowCount()):
+            it = self.label_table.item(r, 0)
+            if it and it.data(Qt.UserRole) == uid:
+                self.label_table.selectRow(r)
+                self.label_table.scrollToItem(it)
+                break
+        self._is_syncing = False
 
     def sync_list_selection(self, class_id):
         self.class_list.blockSignals(True)
@@ -215,34 +375,44 @@ class LabellerPage(QWidget):
         self.canvas.current_color = get_color(class_id)
 
     def sync_classes_to_canvas(self):
-        """同步类别到画布缓存"""
-        if hasattr(self, 'class_list'):
-            classes = [self.class_list.item(i).text() for i in range(self.class_list.count())]
-            self.canvas.set_class_names(classes)
+        """核心修复：只传递纯净的列表给画布"""
+        clean_classes = self.config.get("classes", ["Target"])
+        self.canvas.set_class_names(clean_classes)
+
 
     def add_class(self):
         text, ok = QInputDialog.getText(self, "新增类别", "类别名称:")
         if ok and text:
-            self.class_list.addItem(text)
+            if "classes" not in self.config: self.config["classes"] = []
+            self.config["classes"].append(text) # 更新配置
+            self.class_list.addItem(text) # 临时占位，会被后续 update_class_counters 刷新
             self.sync_classes()
 
     def del_class(self):
         if self.class_list.count() <= 1:
             return QMessageBox.warning(self, "提醒", "至少需要保留一个类别")
-        self.class_list.takeItem(self.class_list.currentRow())
+        row = self.class_list.currentRow()
+        self.config["classes"].pop(row) # 从配置中删除
+        self.class_list.takeItem(row) # 从 UI 中删除
         self.sync_classes()
 
     def edit_class(self, item):
-        text, ok = QInputDialog.getText(self, "修改类别", "新名称:", text=item.text())
+        row = self.class_list.row(item)
+        old_name = self.config["classes"][row]  # 拿纯净名
+
+        text, ok = QInputDialog.getText(self, "修改类别", "新名称:", text=old_name)
         if ok and text:
-            item.setText(text)
-            self.sync_classes()
+            self.config["classes"][row] = text  # 更新纯净名
+            self.sync_classes()  # 保存并刷新
 
     def sync_classes(self):
-        classes = [self.class_list.item(i).text() for i in range(self.class_list.count())]
-        self.config["classes"] = classes
+        """核心修复：不再从 UI 抓取文本，而是由 UI 驱动配置保存"""
+        # 此时 self.config["classes"] 应该已经在 add/del/edit 逻辑中被修改过了
         save_config(self.config)
+        # 同步给画布纯净名称
         self.sync_classes_to_canvas()
+        # 刷新 UI 展示（带括号的数字）
+        self.update_class_counters()
 
     def ensure_model_loaded(self):
         """核心逻辑：智能寻找半成品模型"""
@@ -296,6 +466,76 @@ class LabellerPage(QWidget):
         self.config["last_model_path"] = os.path.abspath(path)
         save_config(self.config)
 
+    def show_model_menu(self):
+        """弹出多源模型选择菜单"""
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+                    QMenu {
+                        background-color: white;
+                        border: 1px solid #dcdfe6;
+                        font-size: 18px;             /* 字体从默认加大到 18px */
+                        font-weight: 500;
+                        padding: 5px 0px;
+                    }
+                    QMenu::item {
+                        padding: 12px 40px;          /* 增加上下内边距让菜单项更高，横向增加留白 */
+                        border-bottom: 1px solid #f2f2f2; /* 增加细分割线 */
+                        color: #2c3e50;
+                    }
+                    QMenu::item:selected {
+                        background-color: #3498db;   /* 选中时背景变蓝 */
+                        color: white;                /* 选中时文字变白 */
+                    }
+                    QMenu::item:disabled {
+                        color: #909399;             /* 工业中灰色 */
+                        background-color: #f5f7fa;  /* 给个淡淡的灰色背景，增强不可用感 */
+                    }
+                    QMenu::separator {
+                        height: 2px;
+                        background: #ebeef5;
+                        margin: 5px 0px;
+                    }
+                """)
+
+        # 定义四大标准算力产出路径
+        model_paths = {
+            "🏠 本地训练 (liudup_train)": os.path.join(ProjectPaths.RUNS_DIR, "detect", "runs", "liudup_train", "weights", "best.pt"),
+            "☁️ 云端协作 (Notebook)": os.path.join(ProjectPaths.RUNS_DIR, "notebook_results", "best.pt"),
+            "⚡ 算力摆渡 (Minio AutoSync)": os.path.join(ProjectPaths.RUNS_DIR, "auto_results", "best.pt"),
+            "📡 局域网协同 (SSH Direct)": os.path.join(ProjectPaths.RUNS_DIR, "ssh_results", "best.pt")
+        }
+
+        for name, path in model_paths.items():
+            action = menu.addAction(name)
+            if not os.path.exists(path):
+                action.setEnabled(False)
+                action.setText(f"{name} (未发现产出)")
+            else:
+                # 使用 lambda 捕获当前路径和名称
+                action.triggered.connect(lambda chk, p=path, n=name: self.switch_model_to(p, n))
+
+        menu.addSeparator()
+        action_custom = menu.addAction("📂 手动加载其他权重...")
+        action_custom.triggered.connect(self.manually_select_model)
+
+        # 在按钮正下方弹出
+        menu.exec_(self.btn_select_model.mapToGlobal(QPoint(0, self.btn_select_model.height())))
+
+    def switch_model_to(self, path, name):
+        """切换当前推理引擎"""
+        try:
+            self.current_model = YOLO(path)
+            self.lbl_model_status.setText(f"当前模型: {name}")
+            self.save_model_path_to_config(path)
+            QMessageBox.information(self, "切换成功", f"引擎已切换至：\n{name}")
+        except Exception as e:
+            QMessageBox.critical(self, "切换失败", f"模型文件可能损坏或版本不符: {e}")
+
+    def manually_select_model(self):
+        """原有手动选择方法的调用"""
+        path, _ = QFileDialog.getOpenFileName(self, "选择模型权重", "runs", "YOLO Model (*.pt)")
+        if path: self.switch_model_to(path, os.path.basename(path))
+
     def run_ai_inference(self):
         """单张推理逻辑"""
         if self.current_img_index == -1: return
@@ -336,7 +576,7 @@ class LabellerPage(QWidget):
         total = len(self.image_list)
 
         from PyQt5.QtWidgets import QProgressDialog
-        progress = QProgressDialog("🚀 AI 正在拼命跑图...", "取消", 0, total, self)
+        progress = QProgressDialog("  🚀 AI 正在拼命跑图...   ", "取消", 0, total, self)
         progress.setWindowModality(Qt.WindowModal)
         progress.show()
 
@@ -344,32 +584,45 @@ class LabellerPage(QWidget):
             if progress.wasCanceled(): break
 
             try:
-                # stream=True 可以节省内存占用
+                # 1. 运行推理
                 results = self.current_model.predict(source=path, conf=0.25, save=False, verbose=False, stream=True)
 
-                for res in results:  # 使用 stream 模式后的迭代
+                for res in results:
                     if len(res.boxes) > 0:
                         from PyQt5.QtGui import QImageReader
                         reader = QImageReader(path)
                         sz = reader.size()
                         w, h = sz.width(), sz.height()
 
-                        if w <= 0 or h <= 0: continue  # 健壮性检查
+                        if w <= 0 or h <= 0: continue
 
                         yolo_data_list = []
                         for box in res.boxes:
+                            # --- 核心修复：强制转换为 Python 标准类型 (int 和 float) ---
                             coords = box.xyxy[0].cpu().numpy()
-                            cls_id = int(box.cls[0].cpu().numpy())
-                            yolo_coord = convert_to_yolo((w, h), (coords[0], coords[1], coords[2], coords[3]))
-                            yolo_data_list.append((cls_id, yolo_coord))
+                            cls_id = int(box.cls[0].cpu().numpy())  # 确保是标准 int
 
+                            # 将 numpy float32 转换为标准 float 列表
+                            pixel_coords = [float(x) for x in coords]
+
+                            yolo_coord = convert_to_yolo((w, h), pixel_coords)
+
+                            # 再次确保写入 list 的每一项都是标准 float
+                            safe_yolo_coord = [float(x) for x in yolo_coord]
+                            yolo_data_list.append((cls_id, safe_yolo_coord))
+
+                        # 2. 持久化到数据库（现在 json.dumps 不会报错了）
                         self.db.save_label(path, json.dumps(yolo_data_list), w, h, os.path.getsize(path))
+
+                        # 3. 保存到本地 .txt
+                        from utils.yolo_utils import save_yolo_file
                         save_yolo_file(path, yolo_data_list)
                         success_count += 1
 
                 progress.setValue(i + 1)
             except Exception as e:
-                self.append_log(f"⚠️ 处理跳过 {os.path.basename(path)}: {e}")
+                # --- 核心修复：将不存在的 self.append_log 改为 print ---
+                print(f"⚠️ 批量AI处理跳过 {os.path.basename(path)}: {e}")
 
         progress.close()
         QMessageBox.information(self, "批量完成",
@@ -398,10 +651,13 @@ class LabellerPage(QWidget):
         else:
             self.canvas.scene.clear()  # 如果列表为空，清空画布
 
-        self.update_stats_display()
+        self.update_stats_display() # 原有的图片总数统计
+        self.update_class_counters()  # 新增：单项类别统计
 
-    def on_item_clicked(self, item):
-        idx = self.task_list.row(item)
+    def on_task_row_changed(self, index):
+        """任务 5：处理列表行切换事件（包括键盘和点击）"""
+        if index == -1: return # 避免列表为空时触发
+        idx = index
         self.load_image(idx)
 
     def switch_mode(self):
@@ -418,6 +674,7 @@ class LabellerPage(QWidget):
         if 0 <= index < len(self.image_list):
             self.current_img_index = index
             path = self.image_list[index]
+            self.label_table.setRowCount(0) # 任务 2：加载新图前清空列表
             self.canvas.load_image(path)
 
             if self.canvas.pixmap_item:
@@ -494,6 +751,7 @@ class LabellerPage(QWidget):
                     self.task_list.takeItem(self.current_img_index)
 
                 self.update_stats_display()
+                self.update_class_counters()
 
                 # 4. 加载下一张
                 if self.image_list:
@@ -519,6 +777,17 @@ class LabellerPage(QWidget):
     def keyPressEvent(self, event):
         key = event.key()
         modifiers = event.modifiers()
+
+        # --- 核心修复：增加对表格删除的处理 ---
+        if key in (Qt.Key_Delete, Qt.Key_Backspace):
+            if self.label_table.hasFocus():
+                # 如果焦点在审计表格，执行表格专用删除
+                self.delete_selected_from_table()
+                return
+            else:
+                # 否则交给画布处理（原有逻辑）
+                self.canvas.keyPressEvent(event)
+                return
 
         # 如果按下 Ctrl 键，优先让画布处理（复制粘贴）
         if modifiers == Qt.ControlModifier:
@@ -552,9 +821,10 @@ class LabellerPage(QWidget):
         valid_exts = ('.jpg', '.jpeg', '.png', '.bmp', '.webp')
         physical_files = []
         for root, dirs, files in os.walk(folder):
-            # 关键：在这里拦截，防止进入副本目录
-            if '_backup' in dirs: dirs.remove('_backup')
-            if 'yolo_dataset' in dirs: dirs.remove('yolo_dataset')
+            # 任务 9：统计数字也要同步过滤隔离目录
+            blacklist = ['_backup']
+            dirs[:] = [d for d in dirs if d not in blacklist and not d.startswith('yolo_dataset')]
+            
             for f in files:
                 if f.lower().endswith(valid_exts):
                     full_path = os.path.normpath(os.path.abspath(os.path.join(root, f)))
@@ -592,15 +862,104 @@ class LabellerPage(QWidget):
             # 3. 刷UI
             self.refresh_queue()
 
+    def delete_physical_image(self):
+        """任务 6：物理删除原图、标注及数据库记录"""
+        if self.current_img_index == -1 or not self.image_list: return
+        path = self.image_list[self.current_img_index]
+        
+        msg = f"确定要从磁盘彻底删除这张图片吗？\n\n警告：此操作不可恢复，且会同步删除标注文件！\n文件名: {os.path.basename(path)}"
+        if QMessageBox.question(self, "物理删除确认", msg, QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
+            try:
+                # 1. 物理移除文件
+                if os.path.exists(path): os.remove(path)
+                txt_path = os.path.splitext(path)[0] + ".txt"
+                if os.path.exists(txt_path): os.remove(txt_path)
+                
+                # 2. 清理数据库（去重特征 + 标注记录）
+                self.db.remove_mapping(path)
+                self.db.reset_label(path)
+                
+                # 3. UI 剔除与状态重置
+                self.image_list.pop(self.current_img_index)
+                self.task_list.takeItem(self.current_img_index)
+                self.label_table.setRowCount(0)
+                self.update_stats_display()
+                self.update_class_counters()
+                
+                # 4. 加载下一张
+                if self.image_list:
+                    if self.current_img_index >= len(self.image_list):
+                        self.current_img_index = len(self.image_list) - 1
+                    self.load_image(self.current_img_index)
+                else:
+                    self.canvas.scene.clear()
+                    self.current_img_index = -1
+            except Exception as e:
+                QMessageBox.critical(self, "删除失败", f"文件可能被占用或权限不足: {e}")
+
     def on_class_changed(self, row):
         if row < 0: return
 
-        class_name = self.class_list.item(row).text()
+        # 核心修复：直接从 config 获取纯净名称，不从 QListWidget 拿
+        base_classes = self.config.get("classes", [])
+        if row >= len(base_classes): return
+
+        class_name = base_classes[row]
         color = get_color(row)
 
-        # 同步更新画布状态
         self.canvas.current_class_id = row
         self.canvas.current_color = color
-        self.canvas.current_class_name = class_name  # 需要在 canvas 中增加此属性
-
+        self.canvas.current_class_name = class_name
         self.canvas.update_selected_boxes_class(row, color, class_name)
+
+    def update_class_counters(self):
+        """实时更新右侧类别列表的数字统计"""
+        # 1. 获取数据库最新统计结果 {cls_id: count}
+        stats = self.db.get_all_class_counts()
+
+        # 2. 获取原始类别定义（不含数字的纯名称）
+        base_classes = self.config.get("classes", [])
+
+        # 3. 阻塞信号，防止更新文字触发选择变更死循环
+        self.class_list.blockSignals(True)
+
+        for i in range(self.class_list.count()):
+            item = self.class_list.item(i)
+            # 获取该索引对应的基础名称
+            if i < len(base_classes):
+                base_name = base_classes[i]
+                count = stats.get(i, 0)
+                # 更新显示格式为：name (count)
+                item.setText(f"{base_name} ({count})")
+
+                # 视觉优化：如果没有数据，颜色变淡点；有数据则加粗
+                if count > 0:
+                    item.setForeground(QColor("#2c3e50"))
+                else:
+                    item.setForeground(QColor("#909399"))
+
+        self.class_list.blockSignals(False)
+
+    def delete_selected_from_table(self):
+        """核心辅助：从审计表格触发删除画布上的物体"""
+        selected_ranges = self.label_table.selectedRanges()
+        if not selected_ranges:
+            return
+
+        # 获取当前选中的行
+        row = selected_ranges[0].topRow()
+        item_cls = self.label_table.item(row, 0)
+        if not item_cls:
+            return
+
+        # 获取存储在 UserRole 中的唯一 UID
+        uid = item_cls.data(Qt.UserRole)
+
+        # 在画布中寻找并移除
+        for item in self.canvas.scene.items():
+            if isinstance(item, LabelRect) and item.uid == uid:
+                print(f"[LOG] 从表格快捷键触发删除, UID: {uid}")
+                self.canvas.scene.removeItem(item)
+                # 发射移除信号，会自动触发 self.remove_table_row 逻辑
+                self.canvas.item_removed.emit(uid)
+                break

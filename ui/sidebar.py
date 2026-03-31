@@ -58,8 +58,9 @@ class NavigationSidebar(QWidget):
         self.btn_clean = QPushButton("✨\n智能去重")
         self.btn_label = QPushButton("✏️\n交互标注")
         self.btn_train = QPushButton("🚀\n模型训练")
+        self.btn_cloud = QPushButton("☁️\n云端工厂")
 
-        self.buttons = [self.btn_clean, self.btn_label, self.btn_train]
+        self.buttons = [self.btn_clean, self.btn_label, self.btn_train, self.btn_cloud]
         for i, btn in enumerate(self.buttons):
             btn.setCursor(Qt.PointingHandCursor)
             # 关键：设置按钮的尺寸策略，使其在水平方向自动拉伸

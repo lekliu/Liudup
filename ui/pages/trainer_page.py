@@ -4,7 +4,7 @@ import pandas as pd
 from PyQt5.QtGui import QTextCursor, QPixmap
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
                              QLabel, QFrame, QSpinBox, QProgressBar, QPlainTextEdit, QMessageBox, QCheckBox,
-                             QTableWidget, QTableWidgetItem, QHeaderView)
+                             QTableWidget, QTableWidgetItem, QHeaderView, QMenu, QAction)
 from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal, QPoint
 import pyqtgraph as pg
 
@@ -125,36 +125,34 @@ class TrainerPage(QWidget):
         self.btn_start.clicked.connect(self.start_training_flow)
         top_row.addWidget(self.btn_start)
 
-        self.btn_publish = QPushButton("☁️ 一键发布至 Minio")
-        self.btn_publish.setMinimumWidth(180)
-        self.btn_publish.setStyleSheet(self.get_btn_style("#409eff")) # 产出组：蓝色
-        self.btn_publish.setEnabled(False)
-        self.btn_publish.clicked.connect(self.publish_to_cloud)
-        top_row.addWidget(self.btn_publish)
-
         # 增加一个【中止训练】按钮
         self.btn_stop = QPushButton("🛑 中止训练")
         self.btn_stop.setMinimumWidth(130)
         self.btn_stop.setEnabled(False)
-        self.btn_stop.setStyleSheet(self.get_btn_style("#409eff"))
+        self.btn_stop.setStyleSheet(self.get_btn_style("#f56c6c"))
         self.btn_stop.clicked.connect(self.stop_training)
         top_row.addWidget(self.btn_stop)
 
-        # --- 【任务 G1 新增】：查看目录按钮 ---
-        self.btn_open_folder = QPushButton("📂 查看模型目录")
-        self.btn_open_folder.setMinimumWidth(160)
-        self.btn_open_folder.setEnabled(False)
-        self.btn_open_folder.setStyleSheet(self.get_btn_style("#409eff"))  # 统一为蓝色
-        self.btn_open_folder.clicked.connect(self.open_weights_folder)
-        top_row.addWidget(self.btn_open_folder)
+        # --- 任务 1：更多操作下拉菜单 ---
+        self.btn_more = QPushButton("🛠 更多操作 ▼")
+        self.btn_more.setMinimumWidth(160)
+        self.btn_more.setStyleSheet(self.get_btn_style("#409eff"))
+        self.more_menu = QMenu(self)
+        self.action_publish = self.more_menu.addAction("☁️ 一键发布至 Minio")
+        self.action_open = self.more_menu.addAction("📂 查看模型目录")
+        self.action_export = self.more_menu.addAction("📱 导出手机模型 (ONNX/TFLite)")
+        
+        self.action_publish.triggered.connect(self.publish_to_cloud)
+        self.action_open.triggered.connect(self.open_weights_folder)
+        self.action_export.triggered.connect(self.export_mobile_model)
+        
+        # 初始禁用管理类操作
+        self.action_publish.setEnabled(False)
+        self.action_open.setEnabled(False)
+        self.action_export.setEnabled(False)
 
-        self.btn_export = QPushButton("📱 导出手机模型 (ONNX/TFLite)")
-        self.btn_export.setMinimumWidth(260) # 足够宽度保护文字
-        self.btn_export.setEnabled(False)  # 训练完才可用
-        self.btn_export.setMinimumWidth(260) # 足够宽度保护文字
-        self.btn_export.setStyleSheet(self.get_btn_style("#409eff"))
-        self.btn_export.clicked.connect(self.export_mobile_model)
-        top_row.addWidget(self.btn_export)  # 加入到顶部按钮组
+        self.btn_more.setMenu(self.more_menu)
+        top_row.addWidget(self.btn_more)
 
         layout.addLayout(top_row)
 
@@ -658,18 +656,18 @@ class TrainerPage(QWidget):
 
             # --- 修复 Bug B：业务状态激活 ---
             self.last_best_model = best_model_path
-            self.btn_publish.setEnabled(True)  # 激活发布按钮
-            self.btn_export.setEnabled(True)  # 修复：必须同时激活导出按钮
-            self.btn_open_folder.setEnabled(True) # 任务 G1 激活
+            self.action_publish.setEnabled(True)
+            self.action_open.setEnabled(True)
+            self.action_export.setEnabled(True)
 
             # --- 【任务 11】：生成结构化总结报告 ---
             self.generate_summary_report()
         else:
             # 3. 失败或中止的处理
             self.last_best_model = None
-            self.btn_publish.setEnabled(False)
-            self.btn_export.setEnabled(False)
-            self.btn_open_folder.setEnabled(False)
+            self.action_publish.setEnabled(False)
+            self.action_open.setEnabled(False)
+            self.action_export.setEnabled(False)
             self.append_log(f"\n⚠️ 训练已停止，未产出新模型或已中止。")
 
     def generate_summary_report(self):
