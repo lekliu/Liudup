@@ -304,6 +304,7 @@ class LabellerPage(QWidget):
 
     def add_table_row(self, item):
         """任务 2：向审计清单添加一行"""
+        self.label_table.blockSignals(True)  # 核心保护：防止行插入时触发未定义的选区变更
         row = self.label_table.rowCount()
         print(f"[LOG] 准备添加表格行: Row={row}, UID={item.uid}")
         self.label_table.insertRow(row)
@@ -318,6 +319,7 @@ class LabellerPage(QWidget):
         
         self.label_table.setItem(row, 0, cls_item)
         self.label_table.setItem(row, 1, QTableWidgetItem(coord_text))
+        self.label_table.blockSignals(False)  # 恢复信号
 
     def update_table_row(self, item):
         """任务 4：实时更新表格行数据（坐标、类别、颜色）"""
@@ -353,17 +355,25 @@ class LabellerPage(QWidget):
     def on_table_selection_changed(self):
         """任务 3：列表选中 -> 画布选中"""
         if self._is_syncing: return
-        self._is_syncing = True
         
         selected_items = self.label_table.selectedItems()
-        if selected_items:
-            uid = selected_items[0].data(Qt.UserRole)
+        if not selected_items: return
+
+        self._is_syncing = True
+        try:
+            # 获取第一列（存储了 UID 的格子）
+            row = self.label_table.currentRow()
+            it = self.label_table.item(row, 0)
+            if not it: return
+            uid = it.data(Qt.UserRole)
+            
             for item in self.canvas.scene.items():
                 if isinstance(item, LabelRect) and item.uid == uid:
                     self.canvas.scene.clearSelection()
                     item.setSelected(True)
                     break
-        self._is_syncing = False
+        finally:
+            self._is_syncing = False
 
     def sync_table_selection(self, canvas_item):
         """任务 3：画布选中 -> 列表选中"""

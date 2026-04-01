@@ -5,13 +5,15 @@ from PyQt5.QtGui import QPen, QColor, QPixmap, QPainter, QCursor
 
 class LabelRect(QGraphicsRectItem):
     HANDLE_SIZE = 8
+    _counter = 0  # 核心修复：引入受控自增计数器
 
     def __init__(self, rect, class_id, color, class_name="Unknown"):
         super().__init__(rect)
+        LabelRect._counter += 1
         self.label_id = class_id
         self.class_name = class_name
         self.color = color
-        self.uid = id(self)  # 任务 2：唯一标识符
+        self.uid = LabelRect._counter  # 彻底解决内存地址过大导致的溢出崩溃
         self._update_callback = None # 任务 4：回调函数
         self.update_style()
         self.setOpacity(0.6)

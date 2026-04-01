@@ -62,6 +62,7 @@ class MainWindow(QMainWindow):
         # 4. 组装拆分器
         self.splitter.addWidget(self.sidebar)
         self.splitter.addWidget(self.stack)
+        self.splitter.setCollapsible(0, False) # 确保组件添加后才调用
 
         # 业界通用设置：
         self.splitter.setHandleWidth(4)  # 设置手柄的交互热区宽度
