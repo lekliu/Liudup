@@ -304,9 +304,8 @@ class LabellerPage(QWidget):
 
     def add_table_row(self, item):
         """任务 2：向审计清单添加一行"""
-        self.label_table.blockSignals(True)  # 核心保护：防止行插入时触发未定义的选区变更
+        print(f"[TRACE] 入口: add_table_row | Row={self.label_table.rowCount()} | UID={item.uid}")
         row = self.label_table.rowCount()
-        print(f"[LOG] 准备添加表格行: Row={row}, UID={item.uid}")
         self.label_table.insertRow(row)
         
         # 任务 4：使用 sceneBoundingRect 获取绝对物理坐标
@@ -319,7 +318,6 @@ class LabellerPage(QWidget):
         
         self.label_table.setItem(row, 0, cls_item)
         self.label_table.setItem(row, 1, QTableWidgetItem(coord_text))
-        self.label_table.blockSignals(False)  # 恢复信号
 
     def update_table_row(self, item):
         """任务 4：实时更新表格行数据（坐标、类别、颜色）"""
@@ -355,7 +353,8 @@ class LabellerPage(QWidget):
     def on_table_selection_changed(self):
         """任务 3：列表选中 -> 画布选中"""
         if self._is_syncing: return
-        
+        print(f"[TRACE] 入口: on_table_selection_changed | 当前Row: {self.label_table.currentRow()}")
+
         selected_items = self.label_table.selectedItems()
         if not selected_items: return
 
@@ -650,13 +649,14 @@ class LabellerPage(QWidget):
         QMessageBox.information(self, "批量完成",
                                 f"任务结束！成功预标注 {success_count} 张图。\n\n请刷新队列并切换到“已标注”模式进行校对。")
         self.refresh_queue()
+        print(f"[DIAG] === 模式切换结束 ===")
 
     def refresh_queue(self):
         self.config = load_config()
         folder = self.config.get("local_path", "")
         if not folder:
             return QMessageBox.warning(self, "提醒", "请先在去重页面选择工作目录")
-        # --- 修改点：根据模式加载不同的列表 ---
+        print(f"[TRACE] 入口: refresh_queue | 模式: {'已标注' if self.btn_mode_done.isChecked() else '待标注'}")
         if self.btn_mode_done.isChecked():
             # 加载已标注列表 (你需要确保 DatabaseManager 有这个方法)
             self.image_list = self.db.get_labeled_images(folder)
@@ -664,14 +664,50 @@ class LabellerPage(QWidget):
             # 加载待标注列表 (原有逻辑)
             self.image_list = self.db.get_unlabeled_images(folder)
 
+        print(f"[DIAG] 准备执行 task_list.clear(), 当前列表长度: {self.task_list.count()}")
+        self.task_list.blockSignals(True) # 闸门 1：防止清空和重新填充时触发意外加载
         self.task_list.clear()
+        print(f"[DIAG] task_list.clear() 完成")
+
         for p in self.image_list:
             self.task_list.addItem(os.path.basename(p))
+        self.task_list.blockSignals(False)
 
         if self.image_list:
+            print(f"[DIAG] 列表填充完成({len(self.image_list)}项), 准备调用 load_image(0)")
             self.load_image(0)
         else:
-            self.canvas.scene.clear()  # 如果列表为空，清空画布
+            print(f"[DIAG] 列表为空, 执行安全画布清理")
+
+            # 1. 同时阻塞【表格】和【画布】的信号，防止清理时互相触发回调
+            # === 崩溃修复：进入 scene.clear 保护区 ===
+            self.canvas.is_clearing = True
+
+            self.canvas.blockSignals(True)
+            self.label_table.blockSignals(True)
+
+            try:
+                # 2. 清理画布（这会销毁大量 C++ 对象）
+                self.canvas.scene.clear()
+                # 彻底防止 Qt 回调炸裂
+                try:
+                    self.canvas.scene.selectionChanged.disconnect()
+                except:
+                    pass
+
+                self.canvas.scene.clear()
+
+                # 恢复安全信号
+                self.canvas.scene.selectionChanged.connect(self.canvas.safe_selection_changed)
+                # 3. 重置审计表
+                self.label_table.setRowCount(0)
+            finally:
+                # 4. 无论如何都要恢复信号，否则界面会“死掉”
+                self.label_table.blockSignals(False)
+                self.canvas.blockSignals(False)
+            # ========================================================
+
+            self.current_img_index = -1
 
         self.update_stats_display() # 原有的图片总数统计
         self.update_class_counters()  # 新增：单项类别统计
@@ -685,6 +721,7 @@ class LabellerPage(QWidget):
     def switch_mode(self):
         """处理待标注/已标注模式切换"""
         sender = self.sender()
+        print(f"[TRACE] === 模式切换触发: {sender.text()} ===")
         # 确保点击其中一个，另一个就取消选中
         for btn in self.mode_group:
             btn.setChecked(btn == sender)
@@ -694,47 +731,73 @@ class LabellerPage(QWidget):
     def load_image(self, index):
         """加载图片并同步回显标注框及类别选择"""
         if 0 <= index < len(self.image_list):
-            self.current_img_index = index
-            path = self.image_list[index]
-            self.label_table.setRowCount(0) # 任务 2：加载新图前清空列表
-            self.canvas.load_image(path)
+            # --- 核心修改 1：全面锁定信号闸门，进入“静默加载”模式 ---
+            # 必须同时屏蔽【任务列表】、【审计表格】、【类别列表】以及【画布】本身的信号
+            # 防止在清空旧图片和销毁旧框时，触发 C++ 对象的销毁信号导致 Python 回调非法内存(0xC0000005)
+            self.task_list.blockSignals(True)
+            self.label_table.blockSignals(True)
+            self.class_list.blockSignals(True)
+            self.canvas.blockSignals(True)  # <-- 新增：锁定画布，这是防止崩溃的最关键点
 
-            if self.canvas.pixmap_item:
-                pix = self.canvas.pixmap_item.pixmap()
-                size = (pix.width(), pix.height())
+            try:
+                self.current_img_index = index
+                path = self.image_list[index]
 
-                # 1. 从磁盘加载标注数据
-                from utils.yolo_utils import load_yolo_file
-                existing_boxes = load_yolo_file(path, size)
+                # 清空审计表格（此时不会触发任何联动）
+                self.label_table.setRowCount(0)
 
-                if existing_boxes:
-                    # --- [核心逻辑：同步类别选择] ---
-                    # 取第一个标注框的类别 ID
-                    first_class_id = existing_boxes[0]['class_id']
+                # 执行画布加载（它内部调用的 scene.clear() 是之前的崩溃触发点）
+                # 此时因为 signals 已经 block，销毁对象不会触发任何回调，非常安全
+                self.canvas.load_image(path)
 
-                    # 检查索引合法性，防止因配置文件类别删减导致的越界
-                    if 0 <= first_class_id < self.class_list.count():
-                        # 自动高亮右侧类别列表中的对应项
-                        self.class_list.setCurrentRow(first_class_id)
-                        # 显式触发类别变更逻辑，确保画布绘画 ID 和颜色同步更新
-                        self.on_class_changed(first_class_id)
+                if self.canvas.pixmap_item:
+                    pix = self.canvas.pixmap_item.pixmap()
+                    size = (pix.width(), pix.height())
 
-                    # 磁盘有则用磁盘的
-                    for item in existing_boxes:
-                        r = item['rect']
-                        # 这里的 r 是 (x, y, w, h)
-                        self.canvas.add_label_box(
-                            QRectF(r[0], r[1], r[2], r[3]),
-                            item['class_id']
-                        )
-                elif self.check_inherit.isChecked() and self.last_labels_cache:
-                    # 否则检查继承模式
-                    for cls_id, rect in self.last_labels_cache:
-                        self.canvas.add_label_box(rect, cls_id)
-            # 同步左侧任务列表的选中状态
-            self.task_list.blockSignals(True)  # 防止触发不必要的点击事件
-            self.task_list.setCurrentRow(index)
-            self.task_list.blockSignals(False)
+                    # 从磁盘加载标注数据
+                    from utils.yolo_utils import load_yolo_file
+                    existing_boxes = load_yolo_file(path, size)
+
+                    # --- 核心修改 2：在添加框之前，有选择地开启信号 ---
+                    # 我们希望 add_label_box 能够自动填充右边的审计表格，
+                    # 所以在这里我们恢复画布和表格的信号，但保持列表和类别锁定
+                    self.canvas.blockSignals(False)
+                    self.label_table.blockSignals(False)
+
+                    if existing_boxes:
+                        # 同步类别选择
+                        first_class_id = existing_boxes[0]['class_id']
+                        if 0 <= first_class_id < self.class_list.count():
+                            self.class_list.setCurrentRow(first_class_id)
+                            # 显式手动调用一次切换逻辑
+                            self.on_class_changed(first_class_id)
+
+                        for item in existing_boxes:
+                            r = item['rect']
+                            # 这里添加框时，信号已恢复，会自动同步到右侧表格
+                            self.canvas.add_label_box(
+                                QRectF(r[0], r[1], r[2], r[3]),
+                                item['class_id']
+                            )
+                    elif self.check_inherit.isChecked() and self.last_labels_cache:
+                        # 处理继承模式
+                        for cls_id, rb in self.last_labels_cache:
+                            # rb 是 QRectF 格式
+                            self.canvas.add_label_box(rb, cls_id)
+
+                # 确保任务列表的蓝条定位正确
+                self.task_list.setCurrentRow(index)
+
+            except Exception as e:
+                print(f"❌ 加载图片过程发生错误: {e}")
+            finally:
+                # --- 核心修改 3：无论是否报错，最终都必须解锁闸门 ---
+                self.label_table.blockSignals(False)
+                self.class_list.blockSignals(False)
+                self.task_list.blockSignals(False)
+                self.canvas.blockSignals(False)
+
+                self.canvas.is_clearing = False
 
     def load_next(self):
         self.load_image(self.current_img_index + 1)
@@ -769,8 +832,10 @@ class LabellerPage(QWidget):
 
                 # 3. 仅在“待标注”模式下执行 UI 剔除
                 if self.btn_mode_todo.isChecked():
+                    self.task_list.blockSignals(True)
                     self.image_list.pop(self.current_img_index)
                     self.task_list.takeItem(self.current_img_index)
+                    self.task_list.blockSignals(False)
 
                 self.update_stats_display()
                 self.update_class_counters()
@@ -781,7 +846,10 @@ class LabellerPage(QWidget):
                         self.current_img_index = len(self.image_list) - 1
                     self.load_image(self.current_img_index)
                 else:
+                    self.label_table.blockSignals(True)
                     self.canvas.scene.clear()
+                    self.label_table.setRowCount(0) # 核心修复：队列完成，必须强制清空审计表
+                    self.label_table.blockSignals(False)
                     self.current_img_index = -1
                     QMessageBox.information(self, "完成", "所有任务已标注完毕！")
 

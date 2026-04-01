@@ -1,3 +1,4 @@
+import traceback
 from PyQt5.QtWidgets import QGraphicsView, QGraphicsScene, QGraphicsRectItem, QGraphicsPixmapItem, QGraphicsLineItem, \
     QMenu, QAction
 from PyQt5.QtCore import Qt, QRectF, pyqtSignal, QPoint, QPointF
@@ -18,6 +19,9 @@ class LabelCanvas(QGraphicsView):
         self.scene = QGraphicsScene()
         self.setScene(self.scene)
         self.pixmap_item = None
+
+        # === 崩溃修复：scene.clear 生命周期保护 ===
+        self.is_clearing = False
         self.clipboard = []  # 【新增】剪贴板
         self.class_names = []
         self.current_class_name = "Unknown"
@@ -47,10 +51,19 @@ class LabelCanvas(QGraphicsView):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setStyleSheet("background: #2c3e50; border: none;")
-        self.scene.selectionChanged.connect(self.on_scene_selection_changed)
+
+        # === 安全封装 selectionChanged ===
+        self.scene.selectionChanged.connect(self.safe_selection_changed)
+
+    def safe_selection_changed(self):
+        if self.is_clearing:
+            return
+        self.on_scene_selection_changed()
 
     def on_scene_selection_changed(self):
         selected = self.scene.selectedItems()
+        if len(selected) > 0:
+            print(f"[DIAG] 画布选区变更, 当前选中项数: {len(selected)}")
         if len(selected) == 1 and isinstance(selected[0], LabelRect):
             self.selection_changed.emit(selected[0].label_id)
             self.item_selected.emit(selected[0]) # 发射选中物体信号
@@ -69,7 +82,17 @@ class LabelCanvas(QGraphicsView):
         self.current_class_name = name
 
     def load_image(self, path):
-        self.scene.clear()
+        items_count = len(self.scene.items())
+        print(f"[TRACE] 画布入口: load_image | 当前场景物体数: {items_count}")
+
+        # === 崩溃修复：clear 保护 ===
+        self.is_clearing = True
+        try:
+            self.scene.clear()
+        finally:
+            self.is_clearing = False
+
+        print(f"[TRACE] 画布执行: scene.clear() 完成")
         pixmap = QPixmap(path)
         if pixmap.isNull(): return
 

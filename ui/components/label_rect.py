@@ -94,14 +94,40 @@ class LabelRect(QGraphicsRectItem):
                 new_rect.setRight(max(pos.x(), new_rect.left() + min_size))
 
             self.setRect(new_rect.normalized())
-            if self._update_callback: self._update_callback() 
+            if self._update_callback:
+                scene = self.scene()
+                if scene:
+                    views = scene.views()
+                    if views:
+                        view = views[0]
+                        if getattr(view, "is_clearing", False):
+                            return
+                self._update_callback()
+
         else:
             super().mouseMoveEvent(event)
-            if self.isSelected() and self._update_callback: 
+            if self.isSelected() and self._update_callback:
+                scene = self.scene()
+                if scene:
+                    views = scene.views()
+                    if views and getattr(views[0], "is_clearing", False):
+                        return
                 self._update_callback() 
 
     def itemChange(self, change, value):
         """任务 4：监听物体移动状态变更"""
+
+        # === 崩溃修复：对象已被 Qt 销毁 或 scene 正在 clear ===
+        scene = self.scene()
+        if scene is None:
+            return super().itemChange(change, value)
+
+        views = scene.views()
+        if views:
+            view = views[0]
+            if getattr(view, "is_clearing", False):
+                return super().itemChange(change, value)
+
         if change == QGraphicsRectItem.ItemPositionHasChanged and self._update_callback:
             self._update_callback()
         return super().itemChange(change, value)
