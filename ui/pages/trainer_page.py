@@ -121,6 +121,7 @@ class TrainerPage(QWidget):
         # --- 【UI 规范化：核心全局样式定义】 ---
         self.btn_start = QPushButton("🔥 启动训练")
         self.btn_start.setMinimumWidth(130)
+        self.btn_start.setCursor(Qt.PointingHandCursor)
         self.btn_start.setStyleSheet(self.get_btn_style("#e67e22"))  # 启动：橙色
         self.btn_start.clicked.connect(self.start_training_flow)
         top_row.addWidget(self.btn_start)
@@ -129,6 +130,7 @@ class TrainerPage(QWidget):
         self.btn_stop = QPushButton("🛑 中止训练")
         self.btn_stop.setMinimumWidth(130)
         self.btn_stop.setEnabled(False)
+        self.btn_stop.setCursor(Qt.PointingHandCursor)
         self.btn_stop.setStyleSheet(self.get_btn_style("#f56c6c"))
         self.btn_stop.clicked.connect(self.stop_training)
         top_row.addWidget(self.btn_stop)
@@ -136,6 +138,7 @@ class TrainerPage(QWidget):
         # --- 任务 1：更多操作下拉菜单 ---
         self.btn_more = QPushButton("🛠 更多操作 ▼")
         self.btn_more.setMinimumWidth(160)
+        self.btn_more.setCursor(Qt.PointingHandCursor)
         self.btn_more.setStyleSheet(self.get_btn_style("#409eff"))
         self.more_menu = QMenu(self)
         self.action_publish = self.more_menu.addAction("☁️ 一键发布至 Minio")
@@ -309,7 +312,8 @@ class TrainerPage(QWidget):
         # 2.2 结果图片框 (训练完显示)
         self.res_image_label = ClickableLabel("训练完成后将在此展示诊断报告...")
         self.res_image_label.setAlignment(Qt.AlignCenter)
-        self.res_image_label.setStyleSheet("background: #f0f2f5; cursor: pointer; border: none;")
+        self.res_image_label.setStyleSheet("background: #f0f2f5; border: none;")
+        self.res_image_label.setCursor(Qt.PointingHandCursor)
         self.res_image_label.setScaledContents(False)  # 保持比例
         self.res_image_label.hide()  # 初始隐藏
         self.res_image_label.double_clicked.connect(self.on_results_double_clicked)

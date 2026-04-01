@@ -68,10 +68,10 @@ class ImageCard(QFrame):
         img_layout.addWidget(self.img_label)
         layout.addWidget(img_container)
 
-        # 4. 彻底删除按钮
-        self.btn_del = QPushButton("彻底删除")
-        self.btn_del.setFixedHeight(45)
+        # 4. 剔除此图按钮
+        self.btn_del = QPushButton("剔除此图")
         self.btn_del.setCursor(Qt.PointingHandCursor)
+        self.btn_del.setFixedHeight(65)
         self.btn_del.setStyleSheet("""
                     QPushButton { 
                         background: #ff4d4f; color: white; border-radius: 6px; 
@@ -95,65 +95,5 @@ class ImageCard(QFrame):
             dialog.exec_()
 
     def request_delete(self):
-        """
-        触发删除确认弹窗：
-        采用 HTML 格式化展示，突出显示备份逻辑及待处理的文件名。
-        """
-        msg_box = QMessageBox(self)
-        msg_box.setWindowTitle("清理确认")
-        msg_box.setIcon(QMessageBox.Question)
-
-        file_name = os.path.basename(self.local_path)
-
-        # 构造 Rich Text 格式的确认信息
-        msg_text = f"""
-            <div style='font-family: "Microsoft YaHei"; min-width: 320px;'>
-                <p style='font-size: 20px; color: #2c3e50; font-weight: bold;'>确定要移除这张图片吗？</p>
-                <p style='font-size: 20px; color: #7f8c8d; line-height: 1.6;'>
-                    该操作将执行以下流程：<br>
-                    1. 将本地文件移至 <b style='color: #e67e22;'>_backup</b> 备份目录<br>
-                    2. 从云端 <b style='color: #e67e22;'>Minio</b> 桶同步删除该对象
-                </p>
-                <hr style='border: 0; border-top: 1px solid #eee;'>
-                <p style='font-size: 20px; color: #3498db; word-break: break-all;'>
-                    <b>待清理文件：</b><br>{file_name}
-                </p>
-            </div>
-        """
-        msg_box.setText(msg_text)
-
-        # 自定义交互按钮，增强操作预期
-        btn_confirm = msg_box.addButton(" 确认移动并删除 ", QMessageBox.AcceptRole)
-        btn_cancel = msg_box.addButton(" 保留图片 ", QMessageBox.RejectRole)
-
-        # 默认焦点设为取消，防止误删
-        msg_box.setDefaultButton(btn_cancel)
-
-        # 应用按钮层级样式
-        msg_box.setStyleSheet("""
-            QMessageBox { background-color: white; }
-            QPushButton { 
-                padding: 7px 20px; 
-                border-radius: 4px; 
-                font-weight: bold; 
-                min-width: 110px;
-            }
-            QPushButton[text=" 确认移动并删除 "] { 
-                background-color: #e74c3c; color: white; border: none; 
-            }
-            QPushButton[text=" 确认移动并删除 "]:hover { 
-                background-color: #c0392b; 
-            }
-            QPushButton[text=" 保留图片 "] { 
-                background-color: #ecf0f1; color: #2c3e50; border: 1px solid #bdc3c7; 
-            }
-            QPushButton[text=" 保留图片 "]:hover { 
-                background-color: #bdc3c7; 
-            }
-        """)
-
-        msg_box.exec_()
-
-        # 如果用户点击了确认按钮
-        if msg_box.clickedButton() == btn_confirm:
-            self.on_delete_callback(self.local_path, self.remote_key, self)
+        """快速剔除逻辑：不再弹出确认框"""
+        self.on_delete_callback(self.local_path, self.remote_key, self)

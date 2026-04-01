@@ -303,6 +303,7 @@ class CloudPage(QWidget):
         c_lay = QHBoxLayout(ctrl)
         self.btn_run = QPushButton("🚀 开启全自动同步训练")
         self.btn_run.setFixedHeight(60)
+        self.btn_run.setCursor(Qt.PointingHandCursor)
         self.btn_run.setStyleSheet("background: #67c23a; color: white; font-weight: bold; font-size: 22px; border-radius: 8px;")
         self.btn_run.clicked.connect(self.start_auto_pipeline)
 
@@ -390,6 +391,7 @@ class CloudPage(QWidget):
         # 3. 控制台与监控 (修复：将之前错位的代码移入此处)
         self.btn_run_ssh = QPushButton("🚀 开启局域网同步训练")
         self.btn_run_ssh.setFixedHeight(60)
+        self.btn_run_ssh.setCursor(Qt.PointingHandCursor)
         self.btn_run_ssh.setStyleSheet("background: #67c23a; color: white; font-weight: bold; font-size: 22px; border-radius: 8px;")
         self.btn_run_ssh.clicked.connect(self.start_ssh_pipeline)
         layout.addWidget(self.btn_run_ssh)

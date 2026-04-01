@@ -4,7 +4,7 @@ import shutil
 from collections import deque
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLineEdit,
                              QPushButton, QFileDialog, QLabel, QScrollArea, QFrame,
-                             QMessageBox, QSpinBox, QCheckBox, QProgressBar, QPlainTextEdit,
+                             QMessageBox, QDoubleSpinBox, QCheckBox, QProgressBar, QPlainTextEdit,
                              QSplitter, QComboBox, QListView, QSizePolicy)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QTextCursor, QFont
@@ -229,9 +229,11 @@ QComboBox QAbstractItemView::item:selected {
 
         # 相似度组
         r2.addWidget(QLabel("容差阈值:"))
-        self.th_spin = QSpinBox()
-        self.th_spin.setRange(0, 100)
-        self.th_spin.setValue(5)
+        self.th_spin = QDoubleSpinBox()
+        self.th_spin.setDecimals(1)
+        self.th_spin.setSingleStep(0.1)
+        self.th_spin.setRange(0.0, 100.0)
+        self.th_spin.setValue(3.0)
         self.th_spin.setSuffix(" %")
         self.th_spin.setFixedWidth(90)
         r2.addWidget(self.th_spin)
@@ -243,7 +245,7 @@ QComboBox QAbstractItemView::item:selected {
         r2.addStretch()
 
         # 动作按钮组
-        self.btn_sync = QPushButton("🔄 同步远程")
+        self.btn_sync = QPushButton("🔄 从Minio库导入")
         self.btn_sync.setObjectName("ActionBtn")
         self.btn_sync.setCursor(Qt.PointingHandCursor)
         self.btn_sync.setStyleSheet("""
@@ -328,9 +330,10 @@ QComboBox QAbstractItemView::item:selected {
         self.lbl_total.setStyleSheet("font-weight: bold; color: #303133; font-size: 20px;")
         self.lbl_stat = QLabel("相似组数: 0")
         self.lbl_stat.setStyleSheet("font-weight: bold; color: #303133; font-size: 20px;")
-        self.btn_batch_del = QPushButton("⚡ 一键保留最高质量图")
+        self.btn_batch_del = QPushButton("全量智能去重")
         self.btn_batch_del.setFixedHeight(40)
         self.btn_batch_del.setEnabled(False)
+        self.btn_batch_del.setCursor(Qt.PointingHandCursor)
         self.btn_batch_del.setStyleSheet("""
             QPushButton { background: #f56c6c; color: white; font-weight: bold; border-radius: 4px; border: none; }
             QPushButton:hover { background: #f78989; }
@@ -439,8 +442,9 @@ QComboBox QAbstractItemView::item:selected {
             t_row = QHBoxLayout()
             title = QLabel(f"相似组 #{i + 1} ({len(group_paths)}张) - 容差: {max_tol}%")
             title.setStyleSheet(f"font-weight: bold; color: {'#67c23a' if max_tol < 1.0 else '#e6a23c'};")
-            btn_kb = QPushButton("👑保留组内最佳")
-            btn_kb.setFixedSize(180, 50)
+            btn_kb = QPushButton("保留最佳原图")
+            btn_kb.setFixedSize(200, 60)
+            # self.btn_run_ssh.setFixedHeight(60)
             btn_kb.setCursor(Qt.PointingHandCursor)
             btn_kb.setStyleSheet("""
                 QPushButton {
@@ -474,10 +478,18 @@ QComboBox QAbstractItemView::item:selected {
         try:
             backup_dir = os.path.join(self.config['local_path'], "_backup")
             if not os.path.exists(backup_dir): os.makedirs(backup_dir)
+            
+            # 同步处理标注文件路径
+            txt_path = os.path.splitext(lp)[0] + ".txt"
             target = os.path.join(backup_dir, os.path.basename(lp))
+            
             if os.path.exists(lp): shutil.move(lp, target)
+            if os.path.exists(txt_path):
+                shutil.move(txt_path, os.path.join(backup_dir, os.path.basename(txt_path)))
+                
             if rk: MinioManager().delete_image(self.config['bucket_name'], rk)
             self.db.remove_mapping(lp)
+            self.db.reset_label(lp) # 同步清理标注记录
 
             # UI局部刷新
             p_box = w.parentWidget()
@@ -503,9 +515,16 @@ QComboBox QAbstractItemView::item:selected {
             backup_dir = os.path.join(self.config['local_path'], "_backup")
             if not os.path.exists(backup_dir): os.makedirs(backup_dir)
             for lp in to_move:
+                txt_p = os.path.splitext(lp)[0] + ".txt"
                 if os.path.exists(lp):
                     shutil.move(lp, os.path.join(backup_dir, os.path.basename(lp)))
+                    
+                    # 同步移动标注文件
+                    if os.path.exists(txt_p):
+                        shutil.move(txt_p, os.path.join(backup_dir, os.path.basename(txt_p)))
+                        
                     self.db.remove_mapping(lp)
+                    self.db.reset_label(lp) # 同 msg 清理标注数据库
             self.update_results_ui({}, {'total_files': 0})
 
     def keep_best_in_group(self, master, duplicates, container):
@@ -517,12 +536,19 @@ QComboBox QAbstractItemView::item:selected {
         scored.sort(key=lambda x: (x['area'], x['size']), reverse=True)
         losers = scored[1:]
 
-        if QMessageBox.question(self, "组内清理确认", "将保留该组最佳图片并移动副本，是否继续？",
-                                QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
-            backup_dir = os.path.join(self.config['local_path'], "_backup")
-            if not os.path.exists(backup_dir): os.makedirs(backup_dir)
-            for l in losers:
-                if os.path.exists(l['path']):
-                    shutil.move(l['path'], os.path.join(backup_dir, os.path.basename(l['path'])))
-                    self.db.remove_mapping(l['path'])
-            container.setParent(None)
+        # 快速处理：保留最佳并自动清理其余副本
+        backup_dir = os.path.join(self.config['local_path'], "_backup")
+        if not os.path.exists(backup_dir): os.makedirs(backup_dir)
+        for l in losers:
+            p = l['path']
+            txt_p = os.path.splitext(p)[0] + ".txt"
+            if os.path.exists(p):
+                shutil.move(p, os.path.join(backup_dir, os.path.basename(p)))
+                
+                # 同步移动标注文件
+                if os.path.exists(txt_p):
+                    shutil.move(txt_p, os.path.join(backup_dir, os.path.basename(txt_p)))
+                    
+                self.db.remove_mapping(p)
+                self.db.reset_label(p) # 同步清理标注数据库记录
+        container.setParent(None)

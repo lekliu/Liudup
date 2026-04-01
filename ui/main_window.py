@@ -43,7 +43,7 @@ class MainWindow(QMainWindow):
             }
         """)
 
-        self.splitter.setCollapsible(0, False)
+        # 核心修复：此处删除 setCollapsible(0, False)，移至 addWidget 之后
 
         # 3. 初始组件
         self.sidebar = NavigationSidebar()

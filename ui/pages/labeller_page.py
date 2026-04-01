@@ -94,10 +94,12 @@ class LabellerPage(QWidget):
         self.btn_mode_todo.setCheckable(True)
         self.btn_mode_todo.setChecked(True)  # 默认处于待标注模式
         self.btn_mode_todo.setFixedHeight(40)
+        self.btn_mode_todo.setCursor(Qt.PointingHandCursor)
 
         self.btn_mode_done = QPushButton("已标注")
         self.btn_mode_done.setCheckable(True)
         self.btn_mode_done.setFixedHeight(40)
+        self.btn_mode_done.setCursor(Qt.PointingHandCursor)
 
         # 业界通用 Tab 样式
         mode_style = """
@@ -153,6 +155,7 @@ class LabellerPage(QWidget):
         self.task_list.currentRowChanged.connect(self.on_task_row_changed)  # 任务 5：监听行变化，支持键盘切换
         side_layout.addWidget(self.task_list)
         btn_refresh = QPushButton("🔄 刷新队列")
+        btn_refresh.setCursor(Qt.PointingHandCursor)
         btn_refresh.clicked.connect(self.refresh_queue)
         side_layout.addWidget(btn_refresh)
         layout.addWidget(self.sidebar)
@@ -175,6 +178,7 @@ class LabellerPage(QWidget):
         # --- 新增：模型源切换按钮 ---
         self.btn_select_model = QPushButton("🎯 切换模型源中心")
         self.btn_select_model.setFixedHeight(40)
+        self.btn_select_model.setCursor(Qt.PointingHandCursor)
         self.btn_select_model.setStyleSheet("""
             QPushButton { background: #34495e; color: white; border-radius: 6px; font-weight: bold; }
             QPushButton:hover { background: #2c3e50; }
@@ -185,6 +189,7 @@ class LabellerPage(QWidget):
         # 按钮 1: 单张预标注
         self.btn_ai_assist = QPushButton("✨ 单张自动识别")
         self.btn_ai_assist.setFixedHeight(40)
+        self.btn_ai_assist.setCursor(Qt.PointingHandCursor)
         self.btn_ai_assist.setStyleSheet("background: #9b59b6; color: white; font-weight: bold;")
         self.btn_ai_assist.clicked.connect(self.run_ai_inference)
         ctrl_layout.addWidget(self.btn_ai_assist)
@@ -192,6 +197,7 @@ class LabellerPage(QWidget):
         # 按钮 2: 批量预标注 (新增)
         self.btn_batch_ai = QPushButton("🚀 队列批量 AI 识别")
         self.btn_batch_ai.setFixedHeight(40)
+        self.btn_batch_ai.setCursor(Qt.PointingHandCursor)
         self.btn_batch_ai.setStyleSheet("""
                     QPushButton { background: #8e44ad; color: white; font-weight: bold; border: 1px solid #7d3c98; }
                     QPushButton:hover { background: #9b59b6; }
@@ -225,8 +231,10 @@ class LabellerPage(QWidget):
 
         h_btn_class = QHBoxLayout()
         btn_add_cls = QPushButton("+ 添加")
+        btn_add_cls.setCursor(Qt.PointingHandCursor)
         btn_add_cls.clicked.connect(self.add_class)
         btn_del_cls = QPushButton("- 删除")
+        btn_del_cls.setCursor(Qt.PointingHandCursor)
         btn_del_cls.clicked.connect(self.del_class)
         h_btn_class.addWidget(btn_add_cls)
         h_btn_class.addWidget(btn_del_cls)
@@ -265,23 +273,27 @@ class LabellerPage(QWidget):
 
         btn_save = QPushButton("💾 保存标注 (S)")
         btn_save.setFixedHeight(50)
+        btn_save.setCursor(Qt.PointingHandCursor)
         btn_save.setStyleSheet("background: #2ecc71; color: white; font-weight: bold;")
         btn_save.clicked.connect(self.save_current_labels)
         ctrl_layout.addWidget(btn_save)
 
         btn_next = QPushButton("⏭ 下一张 (Space)")
         btn_next.setFixedHeight(50)
+        btn_next.setCursor(Qt.PointingHandCursor)
         btn_next.clicked.connect(self.load_next)
         ctrl_layout.addWidget(btn_next)
 
         # 任务 6：按钮组（取消与物理删除）
         self.btn_reset = QPushButton("🗑 取消标注")
+        self.btn_reset.setCursor(Qt.PointingHandCursor)
         self.btn_reset.setStyleSheet("background: #f56c6c; color: white;")
         self.btn_reset.clicked.connect(self.cancel_annotation)
         ctrl_layout.addWidget(self.btn_reset)
 
         self.btn_phys_del = QPushButton("🔥 物理删除素材")
         self.btn_phys_del.setFixedHeight(40)
+        self.btn_phys_del.setCursor(Qt.PointingHandCursor)
         self.btn_phys_del.setStyleSheet("background: #e67e22; color: white; font-weight: bold;")
         self.btn_phys_del.setToolTip("从磁盘彻底删除原图及标注文件，不可恢复。")
         self.btn_phys_del.clicked.connect(self.delete_physical_image)
