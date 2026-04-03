@@ -77,6 +77,7 @@ class LabelRect(QGraphicsRectItem):
         if self.isSelected():
             event.accept()
 
+    # mouseMoveEvent 也同样清理，不要去查 view
     def mouseMoveEvent(self, event):
         if self.handle_type:
             self.prepareGeometryChange()
@@ -95,41 +96,25 @@ class LabelRect(QGraphicsRectItem):
 
             self.setRect(new_rect.normalized())
             if self._update_callback:
-                scene = self.scene()
-                if scene:
-                    views = scene.views()
-                    if views:
-                        view = views[0]
-                        if getattr(view, "is_clearing", False):
-                            return
                 self._update_callback()
 
         else:
             super().mouseMoveEvent(event)
             if self.isSelected() and self._update_callback:
-                scene = self.scene()
-                if scene:
-                    views = scene.views()
-                    if views and getattr(views[0], "is_clearing", False):
-                        return
-                self._update_callback() 
+                self._update_callback()
 
     def itemChange(self, change, value):
-        """任务 4：监听物体移动状态变更"""
-
-        # === 崩溃修复：对象已被 Qt 销毁 或 scene 正在 clear ===
+        # === 崩溃修复：如果对象正在被销毁（没有 scene 了），直接返回 ===
         scene = self.scene()
         if scene is None:
             return super().itemChange(change, value)
 
-        views = scene.views()
-        if views:
-            view = views[0]
-            if getattr(view, "is_clearing", False):
-                return super().itemChange(change, value)
-
+        # 只需要判断是否是位置变动
         if change == QGraphicsRectItem.ItemPositionHasChanged and self._update_callback:
-            self._update_callback()
+            try:
+                self._update_callback()
+            except:
+                pass  # 忽略销毁期间的回调失败
         return super().itemChange(change, value)
 
     def mouseReleaseEvent(self, event):

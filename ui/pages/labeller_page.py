@@ -521,7 +521,7 @@ class LabellerPage(QWidget):
         # 定义四大标准算力产出路径
         model_paths = {
             "🏠 本地训练 (liudup_train)": os.path.join(ProjectPaths.RUNS_DIR, "detect", "runs", "liudup_train", "weights", "best.pt"),
-            "☁️ 云端协作 (Notebook)": os.path.join(ProjectPaths.RUNS_DIR, "notebook_results", "best.pt"),
+            "☁️ 云端协作 (Notebook)": os.path.join(ProjectPaths.RUNS_DIR, "notebook_results", "deploy", "best.pt"),
             "⚡ 算力摆渡 (Minio AutoSync)": os.path.join(ProjectPaths.RUNS_DIR, "auto_results", "best.pt"),
             "📡 局域网协同 (SSH Direct)": os.path.join(ProjectPaths.RUNS_DIR, "ssh_results", "best.pt")
         }
@@ -677,35 +677,20 @@ class LabellerPage(QWidget):
             print(f"[DIAG] 列表填充完成({len(self.image_list)}项), 准备调用 load_image(0)")
             self.load_image(0)
         else:
-            print(f"[DIAG] 列表为空, 执行安全画布清理")
-
-            # 1. 同时阻塞【表格】和【画布】的信号，防止清理时互相触发回调
-            # === 崩溃修复：进入 scene.clear 保护区 ===
-            self.canvas.is_clearing = True
-
-            self.canvas.blockSignals(True)
-            self.label_table.blockSignals(True)
+            # === 核心修正：当切换到空列表时，彻底切断所有组件的联动信号 ===
+            print(f"[DIAG] 列表为空, 执行安全清理")
+            self.canvas.blockSignals(True)  # 封锁画布外壳
+            self.canvas.scene.blockSignals(True)  # 封锁场景核心
+            self.label_table.blockSignals(True)  # 封锁审计表
 
             try:
-                # 2. 清理画布（这会销毁大量 C++ 对象）
-                self.canvas.scene.clear()
-                # 彻底防止 Qt 回调炸裂
-                try:
-                    self.canvas.scene.selectionChanged.disconnect()
-                except:
-                    pass
-
-                self.canvas.scene.clear()
-
-                # 恢复安全信号
-                self.canvas.scene.selectionChanged.connect(self.canvas.safe_selection_changed)
-                # 3. 重置审计表
                 self.label_table.setRowCount(0)
+                self.canvas.scene.clear()
             finally:
-                # 4. 无论如何都要恢复信号，否则界面会“死掉”
+                # 清理完后务必恢复
                 self.label_table.blockSignals(False)
+                self.canvas.scene.blockSignals(False)
                 self.canvas.blockSignals(False)
-            # ========================================================
 
             self.current_img_index = -1
 

@@ -76,6 +76,12 @@ class ImageScanner:
                 dirs.remove('_backup')
             if 'yolo_dataset' in dirs:
                 dirs.remove('yolo_dataset')
+            if 'yolo_dataset_nb' in dirs:
+                dirs.remove('yolo_dataset_nb')
+            if 'yolo_dataset_ssh' in dirs:
+                dirs.remove('yolo_dataset_ssh')
+            if 'yolo_dataset_auto' in dirs:
+                dirs.remove('yolo_dataset_auto')
             for f in files:
                 if f.lower().endswith(valid_exts):
                     path = os.path.normpath(os.path.abspath(os.path.join(root, f)))

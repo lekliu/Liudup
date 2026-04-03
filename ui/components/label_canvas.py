@@ -85,12 +85,12 @@ class LabelCanvas(QGraphicsView):
         items_count = len(self.scene.items())
         print(f"[TRACE] 画布入口: load_image | 当前场景物体数: {items_count}")
 
-        # === 崩溃修复：clear 保护 ===
-        self.is_clearing = True
+        # === 核心修正：封锁场景信号，防止销毁 800 个对象时触发信号风暴 ===
+        self.scene.blockSignals(True)
         try:
             self.scene.clear()
         finally:
-            self.is_clearing = False
+            self.scene.blockSignals(False)  # 清理完再打开
 
         print(f"[TRACE] 画布执行: scene.clear() 完成")
         pixmap = QPixmap(path)

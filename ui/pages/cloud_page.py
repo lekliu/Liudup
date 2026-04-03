@@ -133,7 +133,7 @@ class SSHWorker(QThread):
                 self.progress_signal.emit(int(curr), int(total))
             except: pass
 
-NOTEBOOK_SCRIPT_TEMPLATE = """# Liudup Notebook 协作脚本 (Colab/Kaggle 专用)
+NOTEBOOK_SCRIPT_TEMPLATE = """# Liudup Notebook 协作脚本 (Colab/Kaggle 专用) v3.1
 import os, shutil
 # 1. 环境准备
 print("📦 正在安装依赖...")
@@ -166,16 +166,62 @@ except Exception:
 # 5. 启动云端训练
 print(f"🚀 正在以 {{weight_to_use}} 为起点启动训练...")
 model = YOLO(weight_to_use)
-results = model.train(data='yolo_dataset/data.yaml', epochs={epochs}, imgsz=640)
+results = model.train(data='yolo_dataset/data.yaml', epochs={epochs}, imgsz=640, plots=True)
 
-# 6. 训练结束，自动回传结果
-best_path = str(results.save_dir / 'weights' / 'best.pt')
-print(f"⏫ 训练完成，正在回传模型: {{best_path}}")
-s3.upload_file(best_path, cfg['bucket'], 'cloud_notebook/best.pt')
-print("✅ 回传成功！请回到 Liudup 点击『同步结果』按钮。")
+# 6. 审计数据收集与多平台导出 (FP16)
+print("📊 正在执行模型审计与 FP16 导出...")
+import json, time
+from pathlib import Path
+
+# 提取指标
+metrics_dict = results.results_dict
+meta = {{
+    "model_info": {{"imgsz": 640, "precision": "FP16", "timestamp": time.time()}},
+    "performance": {{
+        "mAP50": round(float(metrics_dict.get('metrics/mAP50(B)', 0)), 4),
+        "precision": round(float(metrics_dict.get('metrics/precision(B)', 0)), 4),
+        "recall": round(float(metrics_dict.get('metrics/recall(B)', 0)), 4)
+    }},
+    "class_detail": {{int(k): {{"name": v, "mAP50": round(float(results.maps[int(k)]), 4)}} for k, v in results.names.items()}}
+}}
+
+with open('metadata.json', 'w') as f:
+    json.dump(meta, f, indent=4)
+
+# 导出手机端模型 (Task 1 核心)
+tflite_path = model.export(format='tflite', half=True)
+coreml_path = model.export(format='coreml', half=True)
+
+# 7. 打包部署全家桶 (Task 2 核心修复)
+print("📦 正在打包全平台部署包 (deploy.zip)...")
+deploy_dir = 'deploy_package'
+if os.path.exists(deploy_dir): shutil.rmtree(deploy_dir)
+os.makedirs(deploy_dir)
+
+shutil.copy2(str(results.save_dir / 'weights' / 'best.pt'), os.path.join(deploy_dir, 'best.pt'))
+shutil.copy2('metadata.json', os.path.join(deploy_dir, 'metadata.json'))
+
+if os.path.exists(tflite_path):
+    shutil.copy2(tflite_path, os.path.join(deploy_dir, 'best.tflite'))
+
+if os.path.exists(coreml_path):
+    # CoreML 是文件夹，需用 copytree
+    shutil.copytree(coreml_path, os.path.join(deploy_dir, 'best.mlpackage'))
+
+res_png = str(results.save_dir / 'results.png')
+if os.path.exists(res_png):
+    shutil.copy2(res_png, os.path.join(deploy_dir, 'results.png'))
+
+# 物理打包并上传单一 ZIP
+zip_path = shutil.make_archive('deploy', 'zip', deploy_dir)
+s3.upload_file(zip_path, cfg['bucket'], 'cloud_notebook/deploy.zip')
+
+# 保留 best.pt 用于断点续传兼容
+s3.upload_file(str(results.save_dir / 'weights' / 'best.pt'), cfg['bucket'], 'cloud_notebook/best.pt')
+print("✅ 部署全家桶已同步至云端摆渡站！请回到 Liudup 点击『同步结果』按钮。")
 """
 
-REMOTE_WORKER_TEMPLATE = """# Liudup Remote Worker v1.0
+REMOTE_WORKER_TEMPLATE = """# Liudup Remote Worker v1.1
 import os, time, json, shutil, boto3
 from ultralytics import YOLO
 
@@ -213,9 +259,40 @@ def run_worker():
             model.add_callback("on_fit_epoch_end", on_epoch_end)
             results = model.train(data='yolo_dataset/data.yaml', epochs=50, imgsz=640)
             
-            # 4. 上传结果并清理
+            # 4. 模型审计与导出 (FP16)
+            meta = {{
+                "model_info": {{"imgsz": 640, "precision": "FP16", "timestamp": time.time()}},
+                "performance": {{
+                    "mAP50": float(results.results_dict.get('metrics/mAP50(B)', 0)),
+                    "precision": float(results.results_dict.get('metrics/precision(B)', 0)),
+                    "recall": float(results.results_dict.get('metrics/recall(B)', 0))
+                }},
+                "class_detail": {{int(k): {{"name": v, "mAP50": float(results.maps[int(k)])}} for k, v in results.names.items()}}
+            }}
+            with open('metadata.json', 'w') as f: json.dump(meta, f, indent=4)
+            
+            tflite_p = model.export(format='tflite', half=True)
+            coreml_p = model.export(format='coreml', half=True)
+            
+            # 打包全家桶 (Task 2)
+            deploy_dir = 'deploy_package'
+            if os.path.exists(deploy_dir): shutil.rmtree(deploy_dir)
+            os.makedirs(deploy_dir)
+            shutil.copy2(str(results.save_dir / 'weights' / 'best.pt'), os.path.join(deploy_dir, 'best.pt'))
+            shutil.copy2('metadata.json', os.path.join(deploy_dir, 'metadata.json'))
+            if os.path.exists(tflite_p): shutil.copy2(tflite_p, os.path.join(deploy_dir, 'best.tflite'))
+            if os.path.exists(coreml_p): shutil.copytree(coreml_p, os.path.join(deploy_dir, 'best.mlpackage'))
+            
+            res_png = str(results.save_dir / 'results.png')
+            if os.path.exists(res_png): shutil.copy2(res_png, os.path.join(deploy_dir, 'results.png'))
+            
+            zip_p = shutil.make_archive('deploy', 'zip', deploy_dir)
+            
+            # 5. 上传结果并清理
+            s3.upload_file(zip_p, MINIO_CFG['bucket'], 'cloud_results/deploy.zip')
             s3.upload_file(str(results.save_dir / 'weights' / 'best.pt'), MINIO_CFG['bucket'], 'cloud_results/best.pt')
             s3.delete_object(Bucket=MINIO_CFG['bucket'], Key='cloud_pending/trigger.json')
+            if os.path.exists(deploy_dir): shutil.rmtree(deploy_dir)
             print("✅ 任务完成，已回传模型。")
         except:
             time.sleep(10)
@@ -509,16 +586,72 @@ class CloudPage(QWidget):
     def sync_notebook_results(self):
         self.log_view_nb.appendPlainText("📡 正在检查云端产出...")
         minio = MinioManager()
+        
+        # 确定本地存储路径
         local_res_dir = os.path.join(ProjectPaths.RUNS_DIR, "notebook_results")
+        deploy_dir = os.path.join(local_res_dir, "deploy")
         if not os.path.exists(local_res_dir): os.makedirs(local_res_dir)
         
-        target_pt = os.path.join(local_res_dir, "best.pt")
         try:
-            minio.s3.download_file(self.config['bucket_name'], "cloud_notebook/best.pt", target_pt)
-            self.log_view_nb.appendPlainText(f"🏆 云端模型已回收：{target_pt}")
-            QMessageBox.information(self, "同步成功", f"云端模型已成功降落至：\n{target_pt}")
+            # 1. 优先尝试拉取 Task 2 定义的全家桶 ZIP
+            zip_local = os.path.join(local_res_dir, "deploy.zip")
+            self.log_view_nb.appendPlainText("⏬ 正在拉取部署全家桶 (deploy.zip)...")
+            minio.s3.download_file(self.config['bucket_name'], "cloud_notebook/deploy.zip", zip_local)
+            
+            # 2. 清理旧目录并执行自动化解压
+            if os.path.exists(deploy_dir): shutil.rmtree(deploy_dir)
+            os.makedirs(deploy_dir)
+            
+            shutil.unpack_archive(zip_local, deploy_dir)
+            self._render_audit_report(self.log_view_nb, deploy_dir)
+            os.remove(zip_local) # 清理 ZIP 临时文件
+            
+            self.log_view_nb.appendPlainText(f"✅ 同步成功！全家桶已落地至: {deploy_dir}")
+            QMessageBox.information(self, "同步成功", f"全家桶已成功降落并自动解压！\n路径: {deploy_dir}")
+            
         except:
-            self.log_view_nb.appendPlainText("❌ 尚未发现云端产出，请确认云端脚本是否运行完毕。")
+            # 3. 降级逻辑：尝试拉取单一 best.pt
+            self.log_view_nb.appendPlainText("⚠️ 未发现全家桶，尝试拉取单一权重 (best.pt)...")
+            target_pt = os.path.join(local_res_dir, "best.pt")
+            try:
+                minio.s3.download_file(self.config['bucket_name'], "cloud_notebook/best.pt", target_pt)
+                self.log_view_nb.appendPlainText(f"🏆 单一模型已回收：{target_pt}")
+                QMessageBox.information(self, "同步成功", f"单一模型已回收：\n{target_pt}")
+            except:
+                self.log_view_nb.appendPlainText("❌ 尚未发现任何云端产出，请确认脚本是否运行完毕。")
+
+    def _render_audit_report(self, log_widget, deploy_dir):
+        """渲染模型审计报告 (Task 4)"""
+        meta_p = os.path.join(deploy_dir, "metadata.json")
+        if not os.path.exists(meta_p): return
+        try:
+            with open(meta_p, 'r') as f: data = json.load(f)
+            perf, info, details = data.get("performance", {}), data.get("model_info", {}), data.get("class_detail", {})
+
+            report = [
+                "\n" + "="*55,
+                "📊 Liudup 模型能力审计报告 (Deploy Ready)",
+                "="*55,
+                f"⚙️ 核心配置: 精度[{info.get('precision')}] | 尺寸[{info.get('imgsz')}] | 框架[Ultralytics]",
+                "\n🏆 全局性能指标:",
+                f"   • 综合精度 (mAP50):  {perf.get('mAP50', 0):.4f}",
+                f"   • 识别精确率 (P):    {perf.get('precision', 0):.4f}",
+                f"   • 目标召回率 (R):    {perf.get('recall', 0):.4f}",
+                "\n🏷 类别细分表现 (Per-Class Map):"
+            ]
+            # 按类别ID排序显示
+            for cid in sorted(details.keys(), key=lambda x: int(x)):
+                val = details[cid]
+                score = val.get("mAP50", 0)
+                tag = "✅ [优秀]" if score > 0.9 else "⚡ [良好]" if score > 0.6 else "⚠️ [需补录]"
+                report.append(f"   {tag} {val.get('name'):<10} : {score:.4f}")
+            
+            report.append("\n💡 部署建议: ")
+            report.append("   全平台部署包已同步至 deploy/ 目录。")
+            report.append("   Android 使用 .tflite | iOS 使用 .mlpackage")
+            report.append("="*55 + "\n")
+            for line in report: log_widget.appendPlainText(line)
+        except: pass
 
     def start_ssh_pipeline(self):
         if self.worker and self.worker.isRunning():
